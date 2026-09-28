@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css" />
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css" />
+<link rel="stylesheet" href="style.css?v=2" />
+<link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
+<link rel="stylesheet" href="vendor/codemirror/theme/dracula.min.css" />
 </head>
 <body class="room">
   <div class="topbar">
@@ -22,6 +22,8 @@
       <a href="index.html" class="leave-link">Leave</a>
     </div>
   </div>
+
+  <div class="error-banner hidden" id="errorBanner"></div>
 
   <div class="main-layout">
     <div class="editor-pane">
@@ -87,11 +89,19 @@
     </div>
   </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
-<script src="app.js"></script>
+<script>
+window.addEventListener('error', function (e) {
+  var el = document.getElementById('errorBanner');
+  if (!el) return;
+  el.textContent = 'Something failed to load (' + (e.message || 'script error') + '). Try a hard refresh — if it keeps happening, this browser may be blocking a required script.';
+  el.classList.remove('hidden');
+});
+</script>
+<script src="vendor/codemirror/codemirror.min.js"></script>
+<script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
+<script src="vendor/codemirror/mode/clike/clike.min.js"></script>
+<script src="vendor/codemirror/mode/python/python.min.js"></script>
+<script src="vendor/peerjs/peerjs.min.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
