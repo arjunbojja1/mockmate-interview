@@ -913,6 +913,73 @@ console.log(JSON.stringify(__mm_result));
   }
 
   // ---------- Import from LeetCode ----------
+  // LeetCode's API sends no CORS header allowing fetch from another origin
+  // (verified directly against it), and scraping their problem content
+  // programmatically would sidestep access controls their own ToS puts on
+  // it — so this doesn't fetch anything. It parses text the interviewer
+  // already has lawful access to and pastes in themselves: LeetCode's own
+  // "select all" copy of a problem page has a very consistent shape
+  // (title/difficulty line, description, "Example N: Input:/Output:"
+  // blocks, Constraints, and often the starter code), so pulling
+  // difficulty/description/test cases/signature out of it is just parsing,
+  // not scraping.
+  const DEFAULT_PY_STARTER = '# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n';
+
+  function splitTopLevelArgs(s) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of s) {
+      if (ch === '[' || ch === '(' || ch === '{') depth++;
+      if (ch === ']' || ch === ')' || ch === '}') depth--;
+      if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    if (cur.trim()) out.push(cur);
+    return out.map(x => x.trim());
+  }
+  function stripArgName(seg) {
+    const eq = seg.indexOf('=');
+    return eq >= 0 && !/[<>!]=/.test(seg.slice(Math.max(0, eq - 1), eq + 2)) ? seg.slice(eq + 1).trim() : seg.trim();
+  }
+
+  function parseLeetCodePaste(raw) {
+    const text = raw.replace(/\r\n/g, '\n');
+    const lines = text.split('\n');
+
+    const diffMatch = text.match(/\b(Easy|Medium|Hard)\b/);
+    const difficulty = diffMatch ? diffMatch[1].toLowerCase() : '';
+
+    // Strip common chrome lines (title number, bare difficulty, nav labels)
+    // only near the top, so the same words appearing later in the
+    // description (rare, but possible) are left alone.
+    const noiseLine = /^(Topics?|Companies|Hint|Easy|Medium|Hard|Show Hint.*|\d+\.\s.+)$/;
+    const cleaned = lines.filter((l, i) => !(i < 10 && noiseLine.test(l.trim())));
+    const description = cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+    const testCases = [];
+    const exampleRe = /Example\s*\d+:?[\s\S]*?Input:\s*(.+?)\n\s*Output:\s*(.+?)(?:\n|$)/gi;
+    let m;
+    while ((m = exampleRe.exec(text))) {
+      const inputRaw = m[1].trim();
+      const outputRaw = m[2].trim().split(/\bExplanation\b/)[0].trim();
+      const args = splitTopLevelArgs(inputRaw).map(stripArgName);
+      if (args.length) testCases.push({ input: args.join('\n'), expected: outputRaw });
+    }
+
+    let signature = null;
+    const pyMatch = text.match(/def\s+(\w+)\s*\([^)]*\)[^\n:]*:/);
+    if (pyMatch) {
+      const sigLine = pyMatch[0];
+      const hasClass = /class\s+Solution\b/.test(text);
+      signature = {
+        lang: 'python',
+        code: hasClass ? `class Solution:\n    ${sigLine}\n        pass\n` : `${sigLine}\n    pass\n`,
+      };
+    }
+
+    return { difficulty, description, testCases, signature };
+  }
+
   const importPanel = document.getElementById('importPanel');
   if (role === 'interviewer') {
     document.getElementById('importLeetcodeBtn').addEventListener('click', () => {
@@ -925,15 +992,46 @@ console.log(JSON.stringify(__mm_result));
       const url = document.getElementById('importUrlInput').value.trim();
       const pasted = document.getElementById('importPasteArea').value.trim();
       if (!pasted) {
-        alert('Paste the problem statement first — LeetCode blocks fetching it automatically from another site, so bring the text over yourself.');
+        alert('Paste the problem page first — LeetCode blocks fetching it automatically from another site, so bring the text over yourself.');
         return;
       }
-      const composed = url ? `Source: ${url}\n\n${pasted}` : pasted;
+
+      const parsed = parseLeetCodePaste(pasted);
+      const composed = url ? `Source: ${url}\n\n${parsed.description}` : parsed.description;
       questionArea.value = composed;
+      if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
+
+      if (parsed.difficulty) {
+        currentMeta = { difficulty: parsed.difficulty };
+        setDifficultyButtonsActive(parsed.difficulty);
+        renderQuestionBadges(currentMeta);
+        broadcast({ type: 'meta', value: currentMeta });
+      }
+
+      if (parsed.testCases.length && !testCases.length) {
+        testCases = parsed.testCases;
+        renderTestcases();
+        syncTestcases();
+      }
+
+      if (parsed.signature && parsed.signature.lang === 'python' && langSelect.value === 'python' && editor.getValue() === DEFAULT_PY_STARTER) {
+        suppressEmit = true;
+        editor.setValue(parsed.signature.code);
+        suppressEmit = false;
+        broadcast({ type: 'code', value: editor.getValue() });
+      }
+
+      const summary = [];
+      if (parsed.difficulty) summary.push('difficulty');
+      if (parsed.testCases.length) summary.push(`${parsed.testCases.length} test case${parsed.testCases.length === 1 ? '' : 's'}`);
+      if (parsed.signature) summary.push('starter code');
+      if (summary.length) {
+        outputPane.textContent = `Imported from paste: ${summary.join(', ')}.` + (testCases.length && !parsed.testCases.length ? ' (test cases already had entries, left them alone.)' : '');
+      }
+
       importPanel.classList.add('hidden');
       document.getElementById('importUrlInput').value = '';
       document.getElementById('importPasteArea').value = '';
-      if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
     });
   }
 

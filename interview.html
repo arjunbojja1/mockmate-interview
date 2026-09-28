@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=15" />
+<link rel="stylesheet" href="style.css?v=16" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -134,11 +134,12 @@
             <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
 
             <div class="import-panel hidden" id="importPanel">
-              <input id="importUrlInput" placeholder="LeetCode problem URL (optional, for reference)" autocomplete="off" />
-              <textarea id="importPasteArea" placeholder="Paste the problem statement copied from LeetCode here (LeetCode doesn't allow fetching it automatically, so paste it in)."></textarea>
+              <p class="import-hint">On the LeetCode problem page, select all (Cmd/Ctrl+A) and copy, then paste the whole thing below — title, difficulty, description, examples, and the starter code if you grab that too. LeetCode blocks fetching it automatically from another site, so this reads what you paste instead.</p>
+              <input id="importUrlInput" placeholder="Problem URL (optional, for reference)" autocomplete="off" />
+              <textarea id="importPasteArea" placeholder="Paste the whole LeetCode problem page here…"></textarea>
               <div class="import-actions">
                 <button class="mini-btn" id="importCancelBtn">Cancel</button>
-                <button class="mini-btn reveal" id="importConfirmBtn">Use this question</button>
+                <button class="mini-btn reveal" id="importConfirmBtn">Parse &amp; use</button>
               </div>
             </div>
           </div>
@@ -202,6 +203,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>
