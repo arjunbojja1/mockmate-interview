@@ -20,7 +20,7 @@
   // ---------- CodeMirror ----------
   const editor = CodeMirror.fromTextArea(document.getElementById('codeArea'), {
     mode: LANGS.python.cmMode,
-    theme: 'dracula',
+    theme: 'mockmate',
     lineNumbers: true,
     tabSize: 4,
     indentUnit: 4,

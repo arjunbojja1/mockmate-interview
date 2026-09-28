@@ -522,6 +522,48 @@ body.room {
   line-height: 1.55;
 }
 
+/* ---------- Editor theme: built from MockMate's own accent colors,
+   not a generic off-the-shelf theme ---------- */
+.cm-s-mockmate.CodeMirror {
+  background: var(--code-bg);
+  color: #E7EAF0;
+}
+.cm-s-mockmate .CodeMirror-gutters {
+  background: var(--code-bg);
+  border-right: 1px solid var(--code-rule);
+}
+.cm-s-mockmate .CodeMirror-linenumber { color: #4B5568; }
+.cm-s-mockmate .CodeMirror-cursor { border-left: 1.5px solid #E7EAF0; }
+.cm-s-mockmate div.CodeMirror-selected { background: rgba(127, 176, 242, 0.18); }
+.cm-s-mockmate .CodeMirror-line::selection,
+.cm-s-mockmate .CodeMirror-line > span::selection,
+.cm-s-mockmate .CodeMirror-line > span > span::selection { background: rgba(127, 176, 242, 0.18); }
+.cm-s-mockmate .CodeMirror-activeline-background { background: rgba(255, 255, 255, 0.03); }
+.cm-s-mockmate matchingbracket,
+.cm-s-mockmate .CodeMirror-matchingbracket { color: #FFFFFF !important; background: rgba(127, 176, 242, 0.22); }
+
+.cm-s-mockmate .cm-keyword { color: #7FB0F2; }
+.cm-s-mockmate .cm-def { color: #6FCF97; }
+.cm-s-mockmate .cm-variable { color: #E7EAF0; }
+.cm-s-mockmate .cm-variable-2 { color: #C7CEDB; }
+.cm-s-mockmate .cm-variable-3, .cm-s-mockmate .cm-type { color: #8FD9C4; }
+.cm-s-mockmate .cm-property { color: #8FD9C4; }
+.cm-s-mockmate .cm-operator { color: #C4CBD6; }
+.cm-s-mockmate .cm-comment { color: #6B7688; font-style: italic; }
+.cm-s-mockmate .cm-string { color: #E3B34E; }
+.cm-s-mockmate .cm-string-2 { color: #D2A34A; }
+.cm-s-mockmate .cm-meta { color: #8AA0C0; }
+.cm-s-mockmate .cm-qualifier { color: #8AA0C0; }
+.cm-s-mockmate .cm-builtin { color: #7FB0F2; }
+.cm-s-mockmate .cm-number { color: #A9B7C6; }
+.cm-s-mockmate .cm-atom { color: #D98C6B; }
+.cm-s-mockmate .cm-bracket { color: #C4CBD6; }
+.cm-s-mockmate .cm-tag { color: #7FB0F2; }
+.cm-s-mockmate .cm-attribute { color: #6FCF97; }
+.cm-s-mockmate .cm-link { color: #7FB0F2; text-decoration: underline; }
+.cm-s-mockmate .cm-error { color: #E06C75; }
+.cm-s-mockmate .cm-invalidchar { color: #E06C75; }
+
 .remote-cursor {
   position: relative;
   display: inline-block;
