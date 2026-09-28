@@ -198,8 +198,18 @@
   const connDot = document.getElementById('connDot');
   const connText = document.getElementById('connText');
 
+  // Public STUN-only ICE often fails to establish a path across two different
+  // networks (symmetric NAT, campus/corporate firewalls). Add a TURN relay as
+  // a fallback so the data channel can still connect in those cases.
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ];
+
   const peerId = role === 'interviewer' ? `mockmate-${room}` : `mockmate-${room}-${Math.random().toString(36).slice(2, 8)}`;
-  const peer = new Peer(peerId);
+  const peer = new Peer(peerId, { config: { iceServers } });
 
   let dataConn = null;
 
@@ -213,8 +223,23 @@
     if (dataConn && dataConn.open) dataConn.send(msg);
   }
 
+  function watchConnectionHealth(conn) {
+    const pc = conn.peerConnection;
+    if (!pc) return;
+    pc.addEventListener('iceconnectionstatechange', () => {
+      if (pc.iceConnectionState === 'failed') {
+        connText.textContent = 'connection failed — likely blocked by a firewall/VPN on one side';
+      } else if (pc.iceConnectionState === 'disconnected') {
+        connText.textContent = 'connection dropped, trying to recover…';
+      } else if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && conn.open) {
+        connText.textContent = 'connected';
+      }
+    });
+  }
+
   function wireDataConn(conn) {
     dataConn = conn;
+    watchConnectionHealth(conn);
     conn.on('open', () => {
       conn.send({ type: 'hello', name: myName, role });
       if (role === 'interviewer') {
@@ -227,6 +252,10 @@
       connDot.classList.remove('connected');
       connText.textContent = 'peer disconnected';
       addChatMsg('', 'Your peer disconnected.', true);
+    });
+    conn.on('error', err => {
+      console.error('data connection error', err);
+      connText.textContent = 'connection error — try refreshing both windows';
     });
   }
 
@@ -269,14 +298,19 @@
     }
   }
 
+  let connectAttempts = 0;
+  function connectToHost() {
+    const hostId = `mockmate-${room}`;
+    connText.textContent = connectAttempts === 0 ? 'connecting…' : `reconnecting (attempt ${connectAttempts + 1})…`;
+    const conn = peer.connect(hostId, { reliable: true });
+    conn.on('open', () => wireDataConn(conn));
+  }
+
   peer.on('open', () => {
     if (role === 'candidate') {
-      const hostId = `mockmate-${room}`;
-      const conn = peer.connect(hostId, { reliable: true });
-      conn.on('open', () => wireDataConn(conn));
-      conn.on('error', () => {
-        connText.textContent = 'could not find that room';
-      });
+      connectToHost();
+    } else {
+      connText.textContent = 'waiting for peer';
     }
   });
 
@@ -284,10 +318,35 @@
     wireDataConn(conn);
   });
 
+  peer.on('disconnected', () => {
+    connText.textContent = 'lost connection to server, reconnecting…';
+    peer.reconnect();
+  });
+
   peer.on('error', err => {
-    console.error(err);
-    if (err.type === 'peer-unavailable') {
-      connText.textContent = 'room not found — check the code';
+    console.error('peer error', err);
+    if (err.type === 'peer-unavailable' && role === 'candidate') {
+      connectAttempts++;
+      if (connectAttempts < 5) {
+        setTimeout(connectToHost, 2000);
+      } else {
+        connText.textContent = 'room not found — check the code with your interviewer';
+      }
+    } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+      connText.textContent = 'trouble reaching the signaling server — check your connection';
+    } else if (err.type === 'unavailable-id') {
+      connText.textContent = 'this room code is already in use — go back and create a new one';
     }
   });
+
+  // If the data channel never opens (common when both sides are behind
+  // restrictive NATs and even the TURN relay can't negotiate), surface that
+  // instead of leaving the status stuck on a silent "connecting…".
+  setTimeout(() => {
+    if (!dataConn || !dataConn.open) {
+      connText.textContent = role === 'candidate'
+        ? 'still trying to connect — this can take longer on some networks'
+        : 'still waiting for your candidate to connect';
+    }
+  }, 12000);
 })();
