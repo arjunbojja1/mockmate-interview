@@ -331,6 +331,22 @@ body.room {
   text-align: center;
 }
 
+.admit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12.5px;
+  padding: 10px 16px;
+  text-align: center;
+}
+.admit-banner .mini-btn { background: #fff; border-color: #fff; }
+.admit-banner .mini-btn.reveal { background: var(--green); border-color: var(--green); color: #fff; }
+.admit-banner .mini-btn.deny { background: transparent; border-color: #fff; color: #fff; }
+.admit-banner .mini-btn.deny:hover { background: rgba(255,255,255,0.15); }
+
 .main-layout {
   flex: 1;
   display: grid;

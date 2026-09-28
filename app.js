@@ -24,6 +24,7 @@
     lineNumbers: true,
     tabSize: 4,
     indentUnit: 4,
+    readOnly: role === 'candidate', // locked until the interviewer admits them
     value: ''
   });
   editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
@@ -542,10 +543,50 @@
   const peerId = role === 'interviewer' ? `mockmate-${room}` : `mockmate-${room}-${Math.random().toString(36).slice(2, 8)}`;
   const peer = new Peer(peerId, { config: { iceServers } });
 
+  // dataConn is only set once the interviewer has actually admitted the
+  // candidate — broadcast() (and everyone's UI) treats "connected" as
+  // "admitted", not just "the data channel happens to be open".
   let dataConn = null;
+  let admitted = role === 'interviewer'; // the interviewer doesn't need admitting
+  let pendingConn = null; // interviewer: a connection waiting on a decision
+  let deniedPermanently = false; // candidate: interviewer explicitly said no — stop auto-retrying
 
   function broadcast(msg) {
-    if (dataConn && dataConn.open) dataConn.send(msg);
+    if (dataConn && dataConn.open && admitted) dataConn.send(msg);
+  }
+
+  const admitBanner = document.getElementById('admitBanner');
+  const admitBannerText = document.getElementById('admitBannerText');
+
+  function sendFullState(conn) {
+    conn.send({ type: 'timer-sync', startTime });
+    conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
+    conn.send({ type: 'testcases', value: testCases.map(tc => ({ input: tc.input, expected: tc.expected })) });
+    conn.send({ type: 'code', value: editor.getValue() });
+    conn.send({ type: 'lang', value: langSelect.value });
+    conn.send({ type: 'verdict', value: currentVerdict });
+  }
+
+  if (role === 'interviewer') {
+    document.getElementById('admitBtn').addEventListener('click', () => {
+      if (!pendingConn) return;
+      const conn = pendingConn;
+      pendingConn = null;
+      admitBanner.classList.add('hidden');
+      dataConn = conn;
+      conn.send({ type: 'admitted' });
+      conn.send({ type: 'hello', name: myName, role });
+      sendFullState(conn);
+      setConnStatus('connected', 'connected');
+    });
+    document.getElementById('denyBtn').addEventListener('click', () => {
+      if (!pendingConn) return;
+      pendingConn.send({ type: 'denied' });
+      pendingConn.close();
+      pendingConn = null;
+      admitBanner.classList.add('hidden');
+      setConnStatus('waiting for peer', 'waiting');
+    });
   }
 
   function watchConnectionHealth(conn) {
@@ -563,30 +604,42 @@
   }
 
   function wireDataConn(conn) {
-    dataConn = conn;
     watchConnectionHealth(conn);
     conn.on('open', () => {
-      // The data channel being open is the actual signal we care about —
-      // don't wait on a 'hello' round-trip to reflect it.
-      setConnStatus('connected', 'connected');
-      conn.send({ type: 'hello', name: myName, role });
-      if (role === 'interviewer') {
-        // Resend full room state on every open, not just the first —
-        // this also covers reconnecting after a mid-interview drop.
-        conn.send({ type: 'timer-sync', startTime });
-        conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
-        conn.send({ type: 'testcases', value: testCases.map(tc => ({ input: tc.input, expected: tc.expected })) });
-        conn.send({ type: 'code', value: editor.getValue() });
-        conn.send({ type: 'lang', value: langSelect.value });
-        conn.send({ type: 'verdict', value: currentVerdict });
+      if (role === 'candidate') {
+        // Don't treat the raw channel as "connected" — wait for the
+        // interviewer to actually admit us before syncing anything.
+        dataConn = conn;
+        admitted = false;
+        editor.setOption('readOnly', true);
+        setConnStatus('waiting for the interviewer to let you in…', 'waiting');
+        conn.send({ type: 'join-request', name: myName });
+      } else {
+        // Interviewer: a new connection is just a knock — hold it until
+        // admitted/denied. If someone's already in, auto-deny extras.
+        if (dataConn && dataConn.open) {
+          conn.send({ type: 'denied', reason: 'occupied' });
+          conn.close();
+          return;
+        }
+        pendingConn = conn;
       }
     });
-    conn.on('data', handleData);
+    conn.on('data', msg => handleData(msg, conn));
     conn.on('close', () => {
-      setConnStatus('peer disconnected', 'idle');
-      clearRemoteCursor();
-      dataConn = null;
-      if (role === 'candidate') setTimeout(connectToHost, 1500);
+      if (conn === dataConn) {
+        setConnStatus('peer disconnected', 'idle');
+        clearRemoteCursor();
+        dataConn = null;
+        admitted = role === 'interviewer';
+        if (role === 'candidate' && !deniedPermanently) {
+          editor.setOption('readOnly', true);
+          setTimeout(connectToHost, 1500);
+        }
+      } else if (conn === pendingConn) {
+        pendingConn = null;
+        admitBanner.classList.add('hidden');
+      }
     });
     conn.on('error', err => {
       console.error('data connection error', err);
@@ -594,10 +647,31 @@
     });
   }
 
-  function handleData(msg) {
+  function handleData(msg, conn) {
     switch (msg.type) {
-      case 'hello':
+      case 'join-request':
+        if (role !== 'interviewer') break;
+        remoteName = `${msg.name} (candidate)`;
+        admitBannerText.textContent = `${msg.name} wants to join the room.`;
+        admitBanner.classList.remove('hidden');
+        setConnStatus(`${msg.name} is waiting to be let in`, 'waiting');
+        break;
+      case 'admitted':
+        admitted = true;
+        editor.setOption('readOnly', false);
         setConnStatus('connected', 'connected');
+        break;
+      case 'denied':
+        editor.setOption('readOnly', true);
+        deniedPermanently = msg.reason !== 'occupied';
+        setConnStatus(
+          msg.reason === 'occupied'
+            ? 'this room already has a candidate connected'
+            : "the interviewer didn't let you in — check with them and refresh to try again",
+          'error'
+        );
+        break;
+      case 'hello':
         remoteName = `${msg.name} (${msg.role})`;
         break;
       case 'cursor':
