@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Practice Interviews</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23ff6b35%22/><text x=%2250%22 y=%2268%22 font-size=%2260%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22sans-serif%22>M</text></svg>" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%231C222A%22/><text x=%2250%22 y=%2268%22 font-size=%2258%22 text-anchor=%22middle%22 fill=%22%23EBEDE5%22 font-family=%22Georgia,serif%22>M</text></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body class="landing">
@@ -14,42 +14,45 @@
       <span class="brand-name">MockMate</span>
     </div>
 
-    <h1>Practice interviews with a friend</h1>
-    <p class="sub">Pick a role, share a room code, and start a live coding + video session. No installs, nothing saved.</p>
+    <h1>Practice the interview, not just the problem.</h1>
+    <p class="sub">Pick a role, share a room code, and work a problem together in a live shared editor. Nothing to install, nothing saved after you close the tab.</p>
 
     <div class="role-cards" id="roleCards">
       <button class="role-card" data-role="interviewer">
-        <div class="role-icon">🧑‍💼</div>
-        <div class="role-title">I'm an Interviewer</div>
-        <div class="role-desc">Create a room and run the session</div>
+        <span class="role-tag">host</span>
+        <div class="role-title">I'm the interviewer</div>
+        <div class="role-desc">Create a room and share the code</div>
       </button>
       <button class="role-card" data-role="candidate">
-        <div class="role-icon">🧑‍💻</div>
-        <div class="role-title">I'm a Candidate</div>
-        <div class="role-desc">Join a room with a code</div>
+        <span class="role-tag">join</span>
+        <div class="role-title">I'm the candidate</div>
+        <div class="role-desc">Enter a room code to join</div>
       </button>
     </div>
 
     <div class="panel hidden" id="interviewerPanel">
-      <h2>Start a room</h2>
-      <p>Your room code:</p>
-      <div class="code-display" id="roomCodeOut">generating…</div>
-      <button class="primary-btn" id="enterAsInterviewer">Enter room</button>
-      <button class="link-btn" id="backFromInterviewer">← back</button>
+      <h2>Your room is ready</h2>
+      <p class="hint">Send this code to your candidate.</p>
+      <div class="code-display" id="roomCodeOut">------</div>
+      <button class="primary-btn" id="copyInviteLink">Copy invite link</button>
+      <button class="primary-btn secondary" id="enterAsInterviewer">Enter room</button>
+      <button class="link-btn" id="backFromInterviewer">back</button>
     </div>
 
     <div class="panel hidden" id="candidatePanel">
       <h2>Join a room</h2>
-      <input id="joinCodeInput" placeholder="Enter room code" autocomplete="off" />
+      <p class="hint">Ask your interviewer for the room code.</p>
+      <input id="joinCodeInput" placeholder="Room code" autocomplete="off" />
       <input id="candidateNameInput" placeholder="Your name" autocomplete="off" />
       <button class="primary-btn" id="enterAsCandidate">Join room</button>
-      <button class="link-btn" id="backFromCandidate">← back</button>
+      <button class="link-btn" id="backFromCandidate">back</button>
     </div>
 
-    <footer>Built for practice interviews · not affiliated with any interview platform</footer>
+    <footer>Practice tool for mock interviews — not affiliated with any interview platform.</footer>
   </div>
 
 <script>
+const urlParams = new URLSearchParams(window.location.search);
 const roleCards = document.getElementById('roleCards');
 const interviewerPanel = document.getElementById('interviewerPanel');
 const candidatePanel = document.getElementById('candidatePanel');
@@ -90,12 +93,36 @@ document.getElementById('enterAsInterviewer').addEventListener('click', () => {
   window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=interviewer&name=${encodeURIComponent('Interviewer')}`;
 });
 
+document.getElementById('copyInviteLink').addEventListener('click', async (e) => {
+  const code = roomCodeOut.dataset.code;
+  const base = window.location.href.replace(/index\.html.*$/, '').replace(/\/$/, '');
+  const link = `${base}/interview.html?room=${encodeURIComponent(code)}&role=candidate`;
+  const btn = e.currentTarget;
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(link);
+    btn.textContent = 'Link copied';
+  } catch {
+    window.prompt('Copy this link:', link);
+  }
+  setTimeout(() => { btn.textContent = original; }, 1800);
+});
+
 document.getElementById('enterAsCandidate').addEventListener('click', () => {
   const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
   const name = document.getElementById('candidateNameInput').value.trim() || 'Candidate';
   if (!code) { alert('Enter a room code'); return; }
   window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=candidate&name=${encodeURIComponent(name)}`;
 });
+
+const prefillRoom = urlParams.get('room');
+if (prefillRoom) {
+  roleCards.classList.add('hidden');
+  candidatePanel.classList.remove('hidden');
+  document.getElementById('joinCodeInput').value = prefillRoom.toUpperCase();
+  document.getElementById('candidateNameInput').focus();
+}
+
 </script>
 </body>
 </html>
