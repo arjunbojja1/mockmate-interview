@@ -6,6 +6,22 @@
 
   document.getElementById('roomChip').textContent = room;
 
+  // ---------- Sidebar tabs ----------
+  const tabBtns = Array.from(document.querySelectorAll('.tab-btn'));
+  const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+  if (role !== 'interviewer') {
+    // Candidates never see the interviewer's solution/paste-activity or
+    // feedback tabs — hide the tabs themselves, not just their content.
+    document.getElementById('notesTabBtn').classList.add('hidden');
+    document.getElementById('feedbackTabBtn').classList.add('hidden');
+  }
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+      tabPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
+    });
+  });
+
   // ---------- Language mapping (CodeMirror mode <-> Judge0 language id) ----------
   // Judge0 CE (ce.judge0.com) is a free, unauthenticated, CORS-open community
   // instance — used instead of Piston's public API, which went whitelist-only

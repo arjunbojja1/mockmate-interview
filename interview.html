@@ -4,22 +4,26 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=11" />
+<link rel="stylesheet" href="style.css?v=12" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
   <div class="topbar">
-    <div class="brand">
-      <div class="brand-mark">M</div>
-      <span class="brand-name">MockMate</span>
-    </div>
-    <div class="room-meta">
-      <span>room <span class="room-code-chip" id="roomChip">------</span></span>
-      <button class="mini-btn hidden" id="copyRoomLink">Copy invite link</button>
-      <span class="timer" id="timer">00:00</span>
+    <div class="topbar-left">
+      <div class="brand">
+        <div class="brand-mark">M</div>
+        <span class="brand-name">MockMate</span>
+      </div>
+      <div class="topbar-divider"></div>
+      <div class="room-code-pill">room <span class="room-code-chip" id="roomChip">------</span></div>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer</span></span>
+    </div>
+    <div class="topbar-right">
+      <span class="timer" id="timer">00:00</span>
+      <button class="mini-btn hidden" id="copyRoomLink">Copy invite link</button>
       <button class="mini-btn deny hidden" id="endAccessBtn">End access</button>
       <span class="verdict-badge hidden" id="verdictBadge"></span>
+      <div class="topbar-divider"></div>
       <a href="index.html" class="leave-link" id="leaveLink">Leave</a>
     </div>
   </div>
@@ -59,63 +63,77 @@
     <div class="resize-handle" id="resizeHandle"></div>
 
     <div class="side-pane" id="sidePane">
-      <div class="question-pane">
-        <div class="side-header-row">
-          <span class="side-header">question</span>
-          <div class="question-actions" id="interviewerQuestionActions">
-            <button class="mini-btn" id="importLeetcodeBtn">Import from LeetCode</button>
-            <button class="mini-btn reveal" id="revealBtn">Show to candidate</button>
+      <div class="tab-bar" id="tabBar">
+        <button class="tab-btn tab-question active" data-tab="question" type="button">Question</button>
+        <button class="tab-btn tab-tests" data-tab="tests" type="button">Tests</button>
+        <button class="tab-btn tab-notes hidden" id="notesTabBtn" data-tab="notes" type="button">Notes</button>
+        <button class="tab-btn tab-feedback hidden" id="feedbackTabBtn" data-tab="feedback" type="button">Feedback</button>
+      </div>
+
+      <div class="tab-panels">
+        <div class="tab-panel active" data-panel="question">
+          <div class="question-pane">
+            <div class="side-header-row">
+              <div class="question-actions" id="interviewerQuestionActions">
+                <button class="mini-btn" id="importLeetcodeBtn">Import from LeetCode</button>
+                <button class="mini-btn reveal" id="revealBtn">Show to candidate</button>
+              </div>
+              <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
+            </div>
+            <div class="question-meta" id="questionMeta">
+              <button class="difficulty-btn difficulty-easy" data-difficulty="easy" type="button">Easy</button>
+              <button class="difficulty-btn difficulty-medium" data-difficulty="medium" type="button">Medium</button>
+              <button class="difficulty-btn difficulty-hard" data-difficulty="hard" type="button">Hard</button>
+            </div>
+            <div class="question-badges hidden" id="questionBadges"></div>
+            <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
+
+            <div class="import-panel hidden" id="importPanel">
+              <input id="importUrlInput" placeholder="LeetCode problem URL (optional, for reference)" autocomplete="off" />
+              <textarea id="importPasteArea" placeholder="Paste the problem statement copied from LeetCode here (LeetCode doesn't allow fetching it automatically, so paste it in)."></textarea>
+              <div class="import-actions">
+                <button class="mini-btn" id="importCancelBtn">Cancel</button>
+                <button class="mini-btn reveal" id="importConfirmBtn">Use this question</button>
+              </div>
+            </div>
           </div>
-          <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
         </div>
-        <div class="question-meta" id="questionMeta">
-          <button class="difficulty-btn difficulty-easy" data-difficulty="easy" type="button">Easy</button>
-          <button class="difficulty-btn difficulty-medium" data-difficulty="medium" type="button">Medium</button>
-          <button class="difficulty-btn difficulty-hard" data-difficulty="hard" type="button">Hard</button>
-        </div>
-        <div class="question-badges hidden" id="questionBadges"></div>
-        <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
 
-        <div class="import-panel hidden" id="importPanel">
-          <input id="importUrlInput" placeholder="LeetCode problem URL (optional, for reference)" autocomplete="off" />
-          <textarea id="importPasteArea" placeholder="Paste the problem statement copied from LeetCode here (LeetCode doesn't allow fetching it automatically, so paste it in)."></textarea>
-          <div class="import-actions">
-            <button class="mini-btn" id="importCancelBtn">Cancel</button>
-            <button class="mini-btn reveal" id="importConfirmBtn">Use this question</button>
+        <div class="tab-panel" data-panel="tests">
+          <div class="testcase-pane hidden" id="testcasePane">
+            <div class="side-header-row tests-header-row">
+              <button class="mini-btn" id="addTestcaseBtn">+ Add case</button>
+            </div>
+            <p class="testcase-hint" id="testcaseHint">One JSON argument per line for input (e.g. two lines for a two-argument function). Comparison is exact — if a problem's output order isn't fixed (like groupAnagrams), a correct solution can still show FAIL, so eyeball the output.</p>
+            <div id="testcaseList"></div>
           </div>
         </div>
-      </div>
 
-      <div class="testcase-pane hidden" id="testcasePane">
-        <div class="side-header-row">
-          <span class="side-header">test cases</span>
-          <button class="mini-btn" id="addTestcaseBtn">+ Add case</button>
+        <div class="tab-panel" data-panel="notes">
+          <div class="solution-pane hidden" id="solutionPane">
+            <div class="side-header">solution — only you see this</div>
+            <textarea id="solutionArea" placeholder="Jot the expected approach, complexity, or reference solution. Never sent to the candidate."></textarea>
+          </div>
+
+          <div class="paste-log hidden" id="pasteLog">
+            <div class="side-header">activity — only you see this</div>
+            <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No activity yet.</div></div>
+          </div>
         </div>
-        <p class="testcase-hint" id="testcaseHint">One JSON argument per line for input (e.g. two lines for a two-argument function). Comparison is exact — if a problem's output order isn't fixed (like groupAnagrams), a correct solution can still show FAIL, so eyeball the output.</p>
-        <div id="testcaseList"></div>
-      </div>
 
-      <div class="solution-pane hidden" id="solutionPane">
-        <div class="side-header">solution — only you see this</div>
-        <textarea id="solutionArea" placeholder="Jot the expected approach, complexity, or reference solution. Never sent to the candidate."></textarea>
-      </div>
-
-      <div class="paste-log hidden" id="pasteLog">
-        <div class="side-header">activity — only you see this</div>
-        <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No activity yet.</div></div>
-      </div>
-
-      <div class="feedback-pane hidden" id="feedbackPane">
-        <div class="side-header">feedback</div>
-        <div class="feedback-scores" id="feedbackScores"></div>
-        <textarea id="feedbackSummary" placeholder="Overall summary — strengths, gaps, would you move them forward?"></textarea>
-        <div class="verdict-buttons">
-          <button class="verdict-btn pass" id="passBtn">Pass</button>
-          <button class="verdict-btn fail" id="failBtn">No pass</button>
-          <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
+        <div class="tab-panel" data-panel="feedback">
+          <div class="feedback-pane hidden" id="feedbackPane">
+            <div class="feedback-scores" id="feedbackScores"></div>
+            <textarea id="feedbackSummary" placeholder="Overall summary — strengths, gaps, would you move them forward?"></textarea>
+            <div class="verdict-buttons">
+              <button class="verdict-btn pass" id="passBtn">Pass</button>
+              <button class="verdict-btn fail" id="failBtn">No pass</button>
+              <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
+            </div>
+            <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy session summary</button>
+            <button class="mini-btn reset-room" id="resetRoomBtn">Reset for next candidate</button>
+          </div>
         </div>
-        <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy session summary</button>
-        <button class="mini-btn reset-room" id="resetRoomBtn">Reset for next candidate</button>
       </div>
     </div>
   </div>
@@ -139,6 +157,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
