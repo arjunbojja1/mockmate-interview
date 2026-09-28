@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=8" />
+<link rel="stylesheet" href="style.css?v=9" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 <link rel="stylesheet" href="vendor/codemirror/theme/dracula.min.css" />
 </head>
@@ -31,6 +31,13 @@
     <span id="admitBannerText"></span>
     <button class="mini-btn reveal" id="admitBtn">Let them in</button>
     <button class="mini-btn deny" id="denyBtn">Deny</button>
+  </div>
+
+  <div class="waiting-overlay hidden" id="waitingOverlay">
+    <div class="waiting-box">
+      <div class="waiting-dot"></div>
+      <p id="waitingText">Connecting…</p>
+    </div>
   </div>
 
   <div class="main-layout">
@@ -63,13 +70,9 @@
           <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
         </div>
         <div class="question-meta" id="questionMeta">
-          <select id="difficultySelect">
-            <option value="">Difficulty</option>
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-          </select>
-          <input id="tagsInput" placeholder="tags, comma separated" autocomplete="off" />
+          <button class="difficulty-btn difficulty-easy" data-difficulty="easy" type="button">Easy</button>
+          <button class="difficulty-btn difficulty-medium" data-difficulty="medium" type="button">Medium</button>
+          <button class="difficulty-btn difficulty-hard" data-difficulty="hard" type="button">Hard</button>
         </div>
         <div class="question-badges hidden" id="questionBadges"></div>
         <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
@@ -98,8 +101,8 @@
       </div>
 
       <div class="paste-log hidden" id="pasteLog">
-        <div class="side-header">paste activity — only you see this</div>
-        <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No large pastes yet.</div></div>
+        <div class="side-header">activity — only you see this</div>
+        <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No activity yet.</div></div>
       </div>
 
       <div class="feedback-pane hidden" id="feedbackPane">
@@ -124,12 +127,18 @@ window.addEventListener('error', function (e) {
   el.textContent = 'Something failed to load (' + (e.message || 'script error') + '). Try a hard refresh — if it keeps happening, this browser may be blocking a required script.';
   el.classList.remove('hidden');
 });
+// If the browser restores this page from its back-forward cache (common on
+// mobile Safari when swiping back/forward), force a real reload — otherwise
+// a stale, frozen snapshot can be shown with no new network request at all.
+window.addEventListener('pageshow', function (e) {
+  if (e.persisted) window.location.reload();
+});
 </script>
 <script src="vendor/codemirror/codemirror.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

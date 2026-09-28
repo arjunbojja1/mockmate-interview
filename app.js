@@ -27,8 +27,8 @@
     readOnly: role === 'candidate', // locked until the interviewer admits them
     value: '',
     extraKeys: {
-      'Cmd-Enter': () => runCode(),
-      'Ctrl-Enter': () => runCode(),
+      'Cmd-Enter': () => runOrTest(),
+      'Ctrl-Enter': () => runOrTest(),
     },
   });
   editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
@@ -59,6 +59,7 @@
   let remoteName = remoteRoleLabel;
   let remoteCursorMark = null;
   let remoteSelectionMark = null;
+  let remoteCursorFadeTimer = null;
 
   function clampPos(line, ch) {
     const lineCount = editor.lineCount();
@@ -80,6 +81,11 @@
     wrap.appendChild(flag);
     const pos = clampPos(line, ch);
     remoteCursorMark = editor.setBookmark(pos, { widget: wrap, insertLeft: true });
+
+    // Show the name label briefly on movement, then fade it so it doesn't
+    // sit permanently over whatever code is next to the cursor.
+    if (remoteCursorFadeTimer) clearTimeout(remoteCursorFadeTimer);
+    remoteCursorFadeTimer = setTimeout(() => flag.classList.add('faded'), 1800);
 
     if (sel) {
       const a = clampPos(sel.anchorLine, sel.anchorCh);
@@ -118,7 +124,13 @@
   const outputPane = document.getElementById('outputPane');
   const runBtn = document.getElementById('runBtn');
   const runTestsBtn = document.getElementById('runTestsBtn');
-  runBtn.addEventListener('click', runCode);
+  // If test cases are defined, "Run" runs against them (calling the
+  // function with no case to run against would just print nothing) —
+  // "Run tests" stays as the explicit/repeatable way to do the same.
+  function runOrTest() {
+    return testCases.length ? runTests() : runCode();
+  }
+  runBtn.addEventListener('click', runOrTest);
   runTestsBtn.addEventListener('click', runTests);
   document.getElementById('clearOutputBtn').addEventListener('click', () => outputPane.textContent = '');
 
@@ -344,37 +356,39 @@
     });
   }
 
-  // ---------- Difficulty + tags ----------
+  // ---------- Difficulty ----------
   const questionMeta = document.getElementById('questionMeta');
   const questionBadges = document.getElementById('questionBadges');
-  const difficultySelect = document.getElementById('difficultySelect');
-  const tagsInput = document.getElementById('tagsInput');
-  let currentMeta = { difficulty: '', tags: '' };
+  const difficultyBtns = Array.from(document.querySelectorAll('.difficulty-btn'));
+  let currentMeta = { difficulty: '' };
 
   function renderQuestionBadges(meta) {
     questionBadges.innerHTML = '';
-    const items = [];
-    if (meta.difficulty) items.push({ text: meta.difficulty, cls: 'difficulty-' + meta.difficulty });
-    (meta.tags || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => items.push({ text: t, cls: 'tag' }));
-    items.forEach(item => {
+    if (meta.difficulty) {
       const span = document.createElement('span');
-      span.className = 'question-badge ' + item.cls;
-      span.textContent = item.text;
+      span.className = 'question-badge difficulty-' + meta.difficulty;
+      span.textContent = meta.difficulty;
       questionBadges.appendChild(span);
-    });
-    questionBadges.classList.toggle('hidden', items.length === 0);
+    }
+    questionBadges.classList.toggle('hidden', !meta.difficulty);
+  }
+
+  function setDifficultyButtonsActive(value) {
+    difficultyBtns.forEach(b => b.classList.toggle('active', b.dataset.difficulty === value));
   }
 
   if (role === 'candidate') {
     questionMeta.classList.add('hidden');
   } else {
-    function syncMeta() {
-      currentMeta = { difficulty: difficultySelect.value, tags: tagsInput.value };
-      renderQuestionBadges(currentMeta);
-      broadcast({ type: 'meta', value: currentMeta });
-    }
-    difficultySelect.addEventListener('change', syncMeta);
-    tagsInput.addEventListener('input', syncMeta);
+    difficultyBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const value = btn.dataset.difficulty;
+        currentMeta = { difficulty: currentMeta.difficulty === value ? '' : value };
+        setDifficultyButtonsActive(currentMeta.difficulty);
+        renderQuestionBadges(currentMeta);
+        broadcast({ type: 'meta', value: currentMeta });
+      });
+    });
   }
 
   // ---------- Solution pane (interviewer only, never broadcast) ----------
@@ -409,19 +423,28 @@
     });
   }
 
-  // ---------- Paste activity log (interviewer only) ----------
+  // ---------- Candidate activity log (interviewer only): pastes + tab switches ----------
   const pasteLog = document.getElementById('pasteLog');
   const pasteLogList = document.getElementById('pasteLogList');
   if (role === 'interviewer') pasteLog.classList.remove('hidden');
 
-  function logPasteEvent(chars, at) {
+  function logActivityEvent(text, at) {
     const empty = pasteLogList.querySelector('.paste-log-empty');
     if (empty) empty.remove();
     const row = document.createElement('div');
     const time = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    row.textContent = `${time} — candidate pasted ${chars} characters`;
+    row.textContent = `${time} — ${text}`;
     pasteLogList.prepend(row);
     while (pasteLogList.children.length > 8) pasteLogList.removeChild(pasteLogList.lastChild);
+  }
+
+  // The candidate's tab visibility (switched away / came back) is a useful,
+  // low-friction signal for the interviewer — not proctoring-grade, just a
+  // heads up, same spirit as the paste flag.
+  if (role === 'candidate') {
+    document.addEventListener('visibilitychange', () => {
+      broadcast({ type: 'visibility', hidden: document.hidden, at: Date.now() });
+    });
   }
 
   // ---------- Feedback pane (interviewer only) ----------
@@ -441,8 +464,8 @@
       const mins = Math.round((Date.now() - startTime) / 60000);
       lines.push(`Duration: ${mins} min`);
     }
-    if (currentMeta.difficulty || currentMeta.tags) {
-      lines.push(`Question: ${[currentMeta.difficulty, currentMeta.tags].filter(Boolean).join(' · ')}`);
+    if (currentMeta.difficulty) {
+      lines.push(`Question: ${currentMeta.difficulty}`);
     }
     lines.push('');
     FEEDBACK_CATEGORIES.forEach(cat => {
@@ -468,7 +491,6 @@
         candidateName: candidateDisplayName || null,
         durationMin: startTime ? Math.round((Date.now() - startTime) / 60000) : null,
         difficulty: currentMeta.difficulty || null,
-        tags: currentMeta.tags || null,
         scores: { ...feedbackScores },
         verdict: currentVerdict,
         summary: summary || null,
@@ -560,16 +582,15 @@
       questionVisible = false;
       revealBtn.textContent = 'Show to candidate';
       revealBtn.classList.remove('active');
-      difficultySelect.value = '';
-      tagsInput.value = '';
-      currentMeta = { difficulty: '', tags: '' };
+      currentMeta = { difficulty: '' };
+      setDifficultyButtonsActive('');
       renderQuestionBadges(currentMeta);
 
       testCases = [];
       renderTestcases();
 
       solutionArea.value = '';
-      pasteLogList.innerHTML = '<div class="paste-log-empty">No large pastes yet.</div>';
+      pasteLogList.innerHTML = '<div class="paste-log-empty">No activity yet.</div>';
 
       FEEDBACK_CATEGORIES.forEach(cat => delete feedbackScores[cat]);
       feedbackScoresEl.querySelectorAll('button').forEach(b => b.classList.remove('active'));
@@ -655,11 +676,26 @@
   // ---------- PeerJS: signaling + data ----------
   const connDot = document.getElementById('connDot');
   const connText = document.getElementById('connText');
+  const waitingOverlay = document.getElementById('waitingOverlay');
+  const waitingText = document.getElementById('waitingText');
 
   function setConnStatus(text, state) {
     connText.textContent = text;
     connDot.classList.toggle('connected', state === 'connected');
     connDot.classList.toggle('waiting', state === 'waiting');
+    // The candidate sees a blank waiting screen instead of the editor until
+    // actually admitted — nothing to read or interact with while waiting.
+    if (role === 'candidate') {
+      waitingOverlay.classList.toggle('hidden', admitted);
+      mainLayoutEl.classList.toggle('hidden', !admitted);
+      waitingText.textContent = text;
+    }
+  }
+
+  const mainLayoutEl = document.querySelector('.main-layout');
+  if (role === 'candidate') {
+    waitingOverlay.classList.remove('hidden');
+    mainLayoutEl.classList.add('hidden');
   }
 
   // Public STUN-only ICE often fails to establish a path across two different
@@ -863,11 +899,16 @@
         renderTestcases();
         break;
       case 'meta':
-        currentMeta = msg.value || { difficulty: '', tags: '' };
+        currentMeta = msg.value || { difficulty: '' };
         renderQuestionBadges(currentMeta);
         break;
       case 'paste-flag':
-        if (role === 'interviewer') logPasteEvent(msg.chars, msg.at);
+        if (role === 'interviewer') logActivityEvent(`candidate pasted ${msg.chars} characters`, msg.at);
+        break;
+      case 'visibility':
+        if (role === 'interviewer') {
+          logActivityEvent(msg.hidden ? 'candidate switched away from the tab' : 'candidate came back to the tab', msg.at);
+        }
         break;
       case 'verdict':
         setVerdict(msg.value, true);
