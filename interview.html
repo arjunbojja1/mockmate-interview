@@ -18,6 +18,7 @@
       <span>room <span class="room-code-chip" id="roomChip">------</span></span>
       <span class="timer" id="timer">00:00</span>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer</span></span>
+      <span class="verdict-badge hidden" id="verdictBadge"></span>
       <a href="index.html" class="leave-link">Leave</a>
     </div>
   </div>
@@ -40,6 +41,20 @@
     </div>
 
     <div class="side-pane">
+      <div class="question-pane">
+        <div class="side-header">question</div>
+        <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here — the candidate sees this live."></textarea>
+      </div>
+
+      <div class="verdict-pane" id="verdictPane">
+        <div class="side-header">verdict</div>
+        <div class="verdict-buttons">
+          <button class="verdict-btn pass" id="passBtn">Pass</button>
+          <button class="verdict-btn fail" id="failBtn">No pass</button>
+          <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
+        </div>
+      </div>
+
       <div class="side-header">notes</div>
       <div class="chat-pane">
         <div class="chat-log" id="chatLog"></div>

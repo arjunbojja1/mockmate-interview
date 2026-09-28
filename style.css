@@ -292,6 +292,16 @@ body.room {
 .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
 .conn-dot.connected { background: var(--green); }
 
+.verdict-badge {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 5px;
+  letter-spacing: 0.02em;
+}
+.verdict-badge.pass { background: #2F8F5B1f; color: var(--green); }
+.verdict-badge.fail { background: #B8453B1f; color: var(--red); }
+
 .leave-link {
   color: var(--red);
   font-size: 12.5px;
@@ -386,11 +396,68 @@ body.room {
 }
 
 .side-header {
-  padding: 12px 16px;
-  font-size: 12px;
+  padding: 10px 16px 8px;
+  font-size: 11px;
   color: var(--ink-soft);
-  border-bottom: 1px solid var(--rule);
+  letter-spacing: 0.02em;
 }
+
+.question-pane {
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+#questionArea {
+  width: 100%;
+  height: 130px;
+  resize: vertical;
+  border: none;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 12px 16px;
+}
+
+#questionArea:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+#questionArea[readonly] {
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: default;
+}
+
+.verdict-pane {
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+
+.verdict-buttons {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 14px;
+}
+
+.verdict-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--rule-strong);
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.verdict-btn.pass:hover { background: var(--green); border-color: var(--green); color: #fff; }
+.verdict-btn.fail:hover { background: var(--red); border-color: var(--red); color: #fff; }
+.verdict-btn.clear { flex: 0 0 auto; padding: 8px 10px; color: var(--ink-soft); }
+.verdict-btn.clear:hover { background: var(--paper); }
 
 .chat-pane {
   flex: 1;

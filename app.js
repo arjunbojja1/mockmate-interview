@@ -106,6 +106,47 @@
 
   addChatMsg('', `Room ${room} created. Share the room code with your friend to begin.`, true);
 
+  // ---------- Question pane ----------
+  const questionArea = document.getElementById('questionArea');
+  if (role === 'candidate') {
+    questionArea.readOnly = true;
+    questionArea.placeholder = 'Waiting for the interviewer to add a question…';
+  }
+
+  let suppressQuestionEmit = false;
+  questionArea.addEventListener('input', () => {
+    if (suppressQuestionEmit || role !== 'interviewer') return;
+    broadcast({ type: 'question', value: questionArea.value });
+  });
+
+  // ---------- Verdict controls (interviewer only) ----------
+  const verdictPane = document.getElementById('verdictPane');
+  const verdictBadge = document.getElementById('verdictBadge');
+
+  if (role !== 'interviewer') {
+    verdictPane.classList.add('hidden');
+  } else {
+    document.getElementById('passBtn').addEventListener('click', () => setVerdict('pass'));
+    document.getElementById('failBtn').addEventListener('click', () => setVerdict('fail'));
+    document.getElementById('clearVerdictBtn').addEventListener('click', () => setVerdict(null));
+  }
+
+  function setVerdict(value, fromPeer) {
+    if (value === 'pass') {
+      verdictBadge.textContent = 'Pass';
+      verdictBadge.className = 'verdict-badge pass';
+      addChatMsg('', 'Verdict: pass.', true);
+    } else if (value === 'fail') {
+      verdictBadge.textContent = 'No pass';
+      verdictBadge.className = 'verdict-badge fail';
+      addChatMsg('', 'Verdict: no pass.', true);
+    } else {
+      verdictBadge.className = 'verdict-badge hidden';
+      addChatMsg('', 'Verdict cleared.', true);
+    }
+    if (!fromPeer) broadcast({ type: 'verdict', value });
+  }
+
   // ---------- PeerJS: signaling + data ----------
   const connDot = document.getElementById('connDot');
   const connText = document.getElementById('connText');
@@ -131,6 +172,7 @@
       conn.send({ type: 'hello', name: myName, role });
       if (role === 'interviewer') {
         conn.send({ type: 'timer-sync', startTime });
+        if (questionArea.value) conn.send({ type: 'question', value: questionArea.value });
       }
     });
     conn.on('data', handleData);
@@ -162,6 +204,14 @@
         break;
       case 'timer-sync':
         if (role === 'candidate') startTimer(msg.startTime);
+        break;
+      case 'question':
+        suppressQuestionEmit = true;
+        questionArea.value = msg.value;
+        suppressQuestionEmit = false;
+        break;
+      case 'verdict':
+        setVerdict(msg.value, true);
         break;
     }
   }
