@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=12" />
+<link rel="stylesheet" href="style.css?v=13" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -55,8 +55,26 @@
         <button class="run" id="runBtn">Run</button>
         <button id="runTestsBtn">Run tests</button>
         <button id="clearOutputBtn">Clear output</button>
+        <div class="toolbar-spacer"></div>
+        <button id="whiteboardToggle">Whiteboard</button>
       </div>
-      <textarea id="codeArea"></textarea>
+      <div class="editor-surface" id="editorSurface">
+        <textarea id="codeArea"></textarea>
+
+        <div class="whiteboard-wrap hidden" id="whiteboardWrap">
+          <div class="wb-toolbar">
+            <button class="wb-color active" data-color="#1C222A" style="background:#1C222A" title="Ink" type="button"></button>
+            <button class="wb-color" data-color="#2C5AA0" style="background:#2C5AA0" title="Blue" type="button"></button>
+            <button class="wb-color" data-color="#2F8F5B" style="background:#2F8F5B" title="Green" type="button"></button>
+            <button class="wb-color" data-color="#B8453B" style="background:#B8453B" title="Red" type="button"></button>
+            <button class="wb-color" data-color="#B8862E" style="background:#B8862E" title="Amber" type="button"></button>
+            <div class="wb-sep"></div>
+            <button class="mini-btn" id="wbEraser" type="button">Eraser</button>
+            <button class="mini-btn" id="wbClear" type="button">Clear board</button>
+          </div>
+          <canvas id="wbCanvas"></canvas>
+        </div>
+      </div>
       <div class="output-pane" id="outputPane">Output shows up here once you run your code.</div>
     </div>
 
@@ -157,6 +175,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
