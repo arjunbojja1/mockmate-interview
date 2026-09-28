@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=9" />
+<link rel="stylesheet" href="style.css?v=10" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 <link rel="stylesheet" href="vendor/codemirror/theme/dracula.min.css" />
 </head>
@@ -92,6 +92,7 @@
           <span class="side-header">test cases</span>
           <button class="mini-btn" id="addTestcaseBtn">+ Add case</button>
         </div>
+        <p class="testcase-hint" id="testcaseHint">One JSON argument per line for input (e.g. two lines for a two-argument function). Comparison is exact — if a problem's output order isn't fixed (like groupAnagrams), a correct solution can still show FAIL, so eyeball the output.</p>
         <div id="testcaseList"></div>
       </div>
 
@@ -139,6 +140,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

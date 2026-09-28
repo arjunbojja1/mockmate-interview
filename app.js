@@ -128,11 +128,17 @@
   // function with no case to run against would just print nothing) —
   // "Run tests" stays as the explicit/repeatable way to do the same.
   function runOrTest() {
+    if (role !== 'interviewer') return;
     return testCases.length ? runTests() : runCode();
   }
   runBtn.addEventListener('click', runOrTest);
   runTestsBtn.addEventListener('click', runTests);
   document.getElementById('clearOutputBtn').addEventListener('click', () => outputPane.textContent = '');
+
+  if (role !== 'interviewer') {
+    runBtn.classList.add('hidden');
+    runTestsBtn.classList.add('hidden');
+  }
 
   async function executeCode(languageId, code, stdin) {
     const controller = new AbortController();
@@ -164,6 +170,73 @@
     return parts.join('\n\n') || '(no output)';
   }
 
+  // ---------- Auto-driver for test cases ----------
+  // A LeetCode-style solution (bare function, or a class Solution with a
+  // method) has nothing that reads stdin or prints — running it against a
+  // test case would always come back empty. Detect the entry point and
+  // append a small driver that reads one JSON value per line from stdin
+  // (one per argument), calls it, and prints the JSON result. Only done for
+  // Python/JavaScript, where the call syntax is simple enough to be
+  // reliable; C++/Java are left as-is (candidate must read stdin manually).
+  function detectPythonEntry(code) {
+    if (/class\s+Solution\b/.test(code)) {
+      const m = code.match(/def\s+(\w+)\s*\(\s*self\b/);
+      if (m) return `Solution().${m[1]}`;
+    }
+    const m = code.match(/^def\s+(\w+)\s*\(/m);
+    return m ? m[1] : null;
+  }
+
+  function detectJsEntry(code) {
+    let m = code.match(/class\s+Solution\b[\s\S]*?(\w+)\s*\(/);
+    if (m) return `new Solution().${m[1]}`;
+    m = code.match(/function\s+(\w+)\s*\(/);
+    if (m) return m[1];
+    m = code.match(/(?:var|let|const)\s+(\w+)\s*=\s*function/);
+    if (m) return m[1];
+    m = code.match(/(?:var|let|const)\s+(\w+)\s*=\s*\(/);
+    if (m) return m[1];
+    return null;
+  }
+
+  function withDriver(langKey, code) {
+    if (langKey === 'python') {
+      const entry = detectPythonEntry(code);
+      if (!entry) return code;
+      return `${code}
+
+if __name__ == "__main__":
+    import json, sys
+    _lines = [l for l in sys.stdin.read().splitlines() if l.strip() != ""]
+    _args = [json.loads(l) for l in _lines]
+    _result = ${entry}(*_args)
+    print(json.dumps(_result, separators=(",", ":")))
+`;
+    }
+    if (langKey === 'javascript') {
+      const entry = detectJsEntry(code);
+      if (!entry) return code;
+      return `${code}
+
+const __mm_lines = require('fs').readFileSync(0, 'utf8').split(/\\r?\\n/).filter(l => l.trim() !== '');
+const __mm_args = __mm_lines.map(l => JSON.parse(l));
+const __mm_result = ${entry}(...__mm_args);
+console.log(JSON.stringify(__mm_result));
+`;
+    }
+    return code; // cpp/java: no auto-driver, run as written
+  }
+
+  // Compares by parsing both sides as JSON and re-stringifying, so
+  // "[[1,2], [3]]" and "[[1,2],[3]]" compare equal — falls back to trimmed
+  // string equality for plain (non-JSON) output.
+  function outputsMatch(actual, expected) {
+    const norm = s => {
+      try { return JSON.stringify(JSON.parse(s)); } catch { return s.trim(); }
+    };
+    return norm(actual) === norm(expected);
+  }
+
   async function runCode() {
     runBtn.disabled = true;
     runBtn.textContent = 'Running…';
@@ -188,24 +261,28 @@
     runTestsBtn.disabled = true;
     runTestsBtn.textContent = 'Running tests…';
     const lang = LANGS[langSelect.value];
+    const rawCode = editor.getValue();
+    const code = withDriver(langSelect.value, rawCode);
+    const noAutoDriver = code === rawCode && langSelect.value !== 'python' && langSelect.value !== 'javascript';
     const summaryLines = [];
     let passCount = 0;
     for (let i = 0; i < testCases.length; i++) {
       const tc = testCases[i];
       try {
-        const result = await executeCode(lang.judge0, editor.getValue(), tc.input);
+        const result = await executeCode(lang.judge0, code, tc.input);
         const actual = (result.stdout || '').trim();
         const expected = (tc.expected || '').trim();
-        const pass = actual === expected;
+        const pass = outputsMatch(actual, expected);
         if (pass) passCount++;
         const errDetail = result.stderr || result.compile_output;
-        tc.result = {
-          status: pass ? 'pass' : 'fail',
-          text: pass
-            ? 'Passed'
-            : `Expected: ${expected || '(empty)'}\nGot: ${actual || '(empty)'}` +
-              (errDetail ? `\n${errDetail.trim()}` : ''),
-        };
+        let text = pass
+          ? 'Passed'
+          : `Expected: ${expected || '(empty)'}\nGot: ${actual || '(empty)'}` +
+            (errDetail ? `\n${errDetail.trim()}` : '');
+        if (!pass && !actual && noAutoDriver) {
+          text += '\nC++/Java aren\'t auto-run yet — your code needs its own main() that reads stdin and prints the result.';
+        }
+        tc.result = { status: pass ? 'pass' : 'fail', text };
         summaryLines.push(`Case ${i + 1}: ${pass ? 'PASS' : 'FAIL'}`);
       } catch (e) {
         tc.result = { status: 'fail', text: 'Error: ' + e.message };
@@ -226,7 +303,10 @@
   let testcaseSyncTimer = null;
 
   testcasePane.classList.remove('hidden');
-  if (role !== 'interviewer') addTestcaseBtn.classList.add('hidden');
+  if (role !== 'interviewer') {
+    addTestcaseBtn.classList.add('hidden');
+    document.getElementById('testcaseHint').classList.add('hidden');
+  }
 
   function renderTestcases() {
     testcaseList.innerHTML = '';
@@ -259,7 +339,7 @@
       row.appendChild(header);
 
       const inputArea = document.createElement('textarea');
-      inputArea.placeholder = 'stdin / input';
+      inputArea.placeholder = 'one argument per line, e.g.\n[2,7,11,15]\n9';
       inputArea.value = tc.input || '';
       inputArea.readOnly = role !== 'interviewer';
       inputArea.addEventListener('input', () => {
@@ -269,7 +349,7 @@
       row.appendChild(inputArea);
 
       const expectedArea = document.createElement('textarea');
-      expectedArea.placeholder = 'expected output';
+      expectedArea.placeholder = 'expected return value, e.g. [[1,2]]';
       expectedArea.value = tc.expected || '';
       expectedArea.readOnly = role !== 'interviewer';
       expectedArea.addEventListener('input', () => {
