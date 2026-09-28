@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MockMate — Practice Interviews</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23ff6b35%22/><text x=%2250%22 y=%2268%22 font-size=%2260%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22sans-serif%22>M</text></svg>" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body class="landing">
+  <div class="landing-wrap">
+    <div class="brand">
+      <div class="brand-mark">M</div>
+      <span class="brand-name">MockMate</span>
+    </div>
+
+    <h1>Practice interviews with a friend</h1>
+    <p class="sub">Pick a role, share a room code, and start a live coding + video session. No installs, nothing saved.</p>
+
+    <div class="role-cards" id="roleCards">
+      <button class="role-card" data-role="interviewer">
+        <div class="role-icon">🧑‍💼</div>
+        <div class="role-title">I'm an Interviewer</div>
+        <div class="role-desc">Create a room and run the session</div>
+      </button>
+      <button class="role-card" data-role="candidate">
+        <div class="role-icon">🧑‍💻</div>
+        <div class="role-title">I'm a Candidate</div>
+        <div class="role-desc">Join a room with a code</div>
+      </button>
+    </div>
+
+    <div class="panel hidden" id="interviewerPanel">
+      <h2>Start a room</h2>
+      <p>Your room code:</p>
+      <div class="code-display" id="roomCodeOut">generating…</div>
+      <button class="primary-btn" id="enterAsInterviewer">Enter room</button>
+      <button class="link-btn" id="backFromInterviewer">← back</button>
+    </div>
+
+    <div class="panel hidden" id="candidatePanel">
+      <h2>Join a room</h2>
+      <input id="joinCodeInput" placeholder="Enter room code" autocomplete="off" />
+      <input id="candidateNameInput" placeholder="Your name" autocomplete="off" />
+      <button class="primary-btn" id="enterAsCandidate">Join room</button>
+      <button class="link-btn" id="backFromCandidate">← back</button>
+    </div>
+
+    <footer>Built for practice interviews · not affiliated with any interview platform</footer>
+  </div>
+
+<script>
+const roleCards = document.getElementById('roleCards');
+const interviewerPanel = document.getElementById('interviewerPanel');
+const candidatePanel = document.getElementById('candidatePanel');
+const roomCodeOut = document.getElementById('roomCodeOut');
+
+function randomCode(len = 6) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+document.querySelectorAll('.role-card').forEach(btn => {
+  btn.addEventListener('click', () => {
+    roleCards.classList.add('hidden');
+    if (btn.dataset.role === 'interviewer') {
+      interviewerPanel.classList.remove('hidden');
+      const code = randomCode();
+      roomCodeOut.textContent = code;
+      roomCodeOut.dataset.code = code;
+    } else {
+      candidatePanel.classList.remove('hidden');
+    }
+  });
+});
+
+document.getElementById('backFromInterviewer').addEventListener('click', () => {
+  interviewerPanel.classList.add('hidden');
+  roleCards.classList.remove('hidden');
+});
+document.getElementById('backFromCandidate').addEventListener('click', () => {
+  candidatePanel.classList.add('hidden');
+  roleCards.classList.remove('hidden');
+});
+
+document.getElementById('enterAsInterviewer').addEventListener('click', () => {
+  const code = roomCodeOut.dataset.code;
+  window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=interviewer&name=${encodeURIComponent('Interviewer')}`;
+});
+
+document.getElementById('enterAsCandidate').addEventListener('click', () => {
+  const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
+  const name = document.getElementById('candidateNameInput').value.trim() || 'Candidate';
+  if (!code) { alert('Enter a room code'); return; }
+  window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=candidate&name=${encodeURIComponent(name)}`;
+});
+</script>
+</body>
+</html>

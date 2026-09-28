@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MockMate — Interview Room</title>
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css" />
+</head>
+<body class="room">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">M</div>
+      <span class="brand-name">MockMate</span>
+    </div>
+    <div class="room-meta">
+      <span>Room <span class="room-code-chip" id="roomChip">------</span></span>
+      <span class="timer" id="timer">00:00</span>
+      <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer…</span></span>
+      <a href="index.html" class="link-btn" style="color:#ff9b9b;">Leave</a>
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <div class="editor-pane">
+      <div class="editor-toolbar">
+        <select id="langSelect">
+          <option value="javascript">JavaScript</option>
+          <option value="python">Python (no run)</option>
+          <option value="text/x-c++src">C++ (no run)</option>
+          <option value="text/x-java">Java (no run)</option>
+        </select>
+        <button class="run" id="runBtn">▶ Run</button>
+        <button id="clearOutputBtn">Clear output</button>
+      </div>
+      <textarea id="codeArea"></textarea>
+      <div class="output-pane" id="outputPane">Output will appear here when you run JavaScript.</div>
+    </div>
+
+    <div class="side-pane">
+      <div class="video-strip">
+        <div class="video-tile">
+          <video id="remoteVideo" autoplay playsinline></video>
+          <div class="video-label" id="remoteLabel">Waiting for peer…</div>
+        </div>
+        <div class="video-tile">
+          <video id="localVideo" autoplay playsinline muted></video>
+          <div class="video-label" id="localLabel">You</div>
+        </div>
+      </div>
+      <div class="media-controls">
+        <button id="toggleMic">🎙 Mute</button>
+        <button id="toggleCam">📷 Camera off</button>
+      </div>
+      <div class="chat-pane">
+        <div class="chat-log" id="chatLog"></div>
+        <div class="chat-input-row">
+          <input id="chatInput" placeholder="Message…" />
+          <button id="chatSend">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
