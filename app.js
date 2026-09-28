@@ -29,6 +29,41 @@
     broadcast({ type: 'code', value: editor.getValue() });
   });
 
+  // ---------- Remote cursor indicator ----------
+  const remoteLabel = role === 'interviewer' ? 'Candidate' : 'Interviewer';
+  let remoteName = remoteLabel;
+  let remoteCursorMark = null;
+
+  function showRemoteCursor(line, ch) {
+    if (remoteCursorMark) remoteCursorMark.clear();
+    const wrap = document.createElement('span');
+    wrap.className = 'remote-cursor ' + (role === 'interviewer' ? 'remote-cursor-candidate' : 'remote-cursor-interviewer');
+    const flag = document.createElement('span');
+    flag.className = 'remote-cursor-flag';
+    flag.textContent = remoteName;
+    wrap.appendChild(flag);
+    const lineCount = editor.lineCount();
+    const safeLine = Math.min(Math.max(line, 0), lineCount - 1);
+    const lineLen = editor.getLine(safeLine).length;
+    const safeCh = Math.min(Math.max(ch, 0), lineLen);
+    remoteCursorMark = editor.setBookmark({ line: safeLine, ch: safeCh }, { widget: wrap, insertLeft: true });
+  }
+
+  function clearRemoteCursor() {
+    if (remoteCursorMark) { remoteCursorMark.clear(); remoteCursorMark = null; }
+  }
+
+  let cursorSendTimer = null;
+  editor.on('cursorActivity', () => {
+    if (suppressEmit) return;
+    if (cursorSendTimer) return;
+    cursorSendTimer = setTimeout(() => {
+      cursorSendTimer = null;
+      const pos = editor.getCursor();
+      broadcast({ type: 'cursor', line: pos.line, ch: pos.ch });
+    }, 80);
+  });
+
   // ---------- Run (JS only, sandboxed) ----------
   const outputPane = document.getElementById('outputPane');
   document.getElementById('runBtn').addEventListener('click', runCode);
@@ -73,38 +108,6 @@
   if (role === 'interviewer') {
     startTimer(Date.now());
   }
-
-  // ---------- Chat ----------
-  const chatLog = document.getElementById('chatLog');
-  function addChatMsg(who, text, system) {
-    const div = document.createElement('div');
-    div.className = 'chat-msg' + (system ? ' system' : '');
-    if (system) {
-      div.textContent = text;
-    } else {
-      div.innerHTML = `<span class="who">${escapeHtml(who)}</span>${escapeHtml(text)}`;
-    }
-    chatLog.appendChild(div);
-    chatLog.scrollTop = chatLog.scrollHeight;
-  }
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  document.getElementById('chatSend').addEventListener('click', sendChat);
-  document.getElementById('chatInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') sendChat();
-  });
-  function sendChat() {
-    const input = document.getElementById('chatInput');
-    const text = input.value.trim();
-    if (!text) return;
-    addChatMsg(myName, text, false);
-    broadcast({ type: 'chat', from: myName, text });
-    input.value = '';
-  }
-
-  addChatMsg('', `Room ${room} created. Share the room code with your friend to begin.`, true);
 
   // ---------- Question pane ----------
   const questionArea = document.getElementById('questionArea');
@@ -182,14 +185,11 @@
     if (value === 'pass') {
       verdictBadge.textContent = 'Pass';
       verdictBadge.className = 'verdict-badge pass';
-      addChatMsg('', 'Verdict: pass.', true);
     } else if (value === 'fail') {
       verdictBadge.textContent = 'No pass';
       verdictBadge.className = 'verdict-badge fail';
-      addChatMsg('', 'Verdict: no pass.', true);
     } else {
       verdictBadge.className = 'verdict-badge hidden';
-      addChatMsg('', 'Verdict cleared.', true);
     }
     if (!fromPeer) broadcast({ type: 'verdict', value });
   }
@@ -197,6 +197,12 @@
   // ---------- PeerJS: signaling + data ----------
   const connDot = document.getElementById('connDot');
   const connText = document.getElementById('connText');
+
+  function setConnStatus(text, state) {
+    connText.textContent = text;
+    connDot.classList.toggle('connected', state === 'connected');
+    connDot.classList.toggle('waiting', state === 'waiting');
+  }
 
   // Public STUN-only ICE often fails to establish a path across two different
   // networks (symmetric NAT, campus/corporate firewalls). Add a TURN relay as
@@ -213,12 +219,6 @@
 
   let dataConn = null;
 
-  function setConnected(remoteName) {
-    connDot.classList.add('connected');
-    connText.textContent = 'connected';
-    addChatMsg('', `${remoteName || 'Your peer'} connected.`, true);
-  }
-
   function broadcast(msg) {
     if (dataConn && dataConn.open) dataConn.send(msg);
   }
@@ -228,11 +228,11 @@
     if (!pc) return;
     pc.addEventListener('iceconnectionstatechange', () => {
       if (pc.iceConnectionState === 'failed') {
-        connText.textContent = 'connection failed — likely blocked by a firewall/VPN on one side';
+        setConnStatus('connection failed — likely blocked by a firewall/VPN on one side', 'error');
       } else if (pc.iceConnectionState === 'disconnected') {
-        connText.textContent = 'connection dropped, trying to recover…';
+        setConnStatus('connection dropped, trying to recover…', 'waiting');
       } else if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && conn.open) {
-        connText.textContent = 'connected';
+        setConnStatus('connected', 'connected');
       }
     });
   }
@@ -241,6 +241,11 @@
     dataConn = conn;
     watchConnectionHealth(conn);
     conn.on('open', () => {
+      // The data channel being open is the actual signal we care about —
+      // don't wait on a 'hello' round-trip to reflect it, since that adds
+      // a race where this side's status can get stuck on "waiting for peer"
+      // even after sends/receives are already working.
+      setConnStatus('connected', 'connected');
       conn.send({ type: 'hello', name: myName, role });
       if (role === 'interviewer') {
         conn.send({ type: 'timer-sync', startTime });
@@ -249,20 +254,23 @@
     });
     conn.on('data', handleData);
     conn.on('close', () => {
-      connDot.classList.remove('connected');
-      connText.textContent = 'peer disconnected';
-      addChatMsg('', 'Your peer disconnected.', true);
+      setConnStatus('peer disconnected', 'idle');
+      clearRemoteCursor();
     });
     conn.on('error', err => {
       console.error('data connection error', err);
-      connText.textContent = 'connection error — try refreshing both windows';
+      setConnStatus('connection error — try refreshing both windows', 'error');
     });
   }
 
   function handleData(msg) {
     switch (msg.type) {
       case 'hello':
-        setConnected(msg.name);
+        setConnStatus('connected', 'connected');
+        remoteName = `${msg.name} (${msg.role})`;
+        break;
+      case 'cursor':
+        showRemoteCursor(msg.line, msg.ch);
         break;
       case 'code':
         suppressEmit = true;
@@ -274,9 +282,6 @@
       case 'lang':
         langSelect.value = msg.value;
         editor.setOption('mode', msg.value);
-        break;
-      case 'chat':
-        addChatMsg(msg.from, msg.text, false);
         break;
       case 'timer-sync':
         if (role === 'candidate') startTimer(msg.startTime);
@@ -301,7 +306,7 @@
   let connectAttempts = 0;
   function connectToHost() {
     const hostId = `mockmate-${room}`;
-    connText.textContent = connectAttempts === 0 ? 'connecting…' : `reconnecting (attempt ${connectAttempts + 1})…`;
+    setConnStatus(connectAttempts === 0 ? 'connecting…' : 'waiting for the interviewer to join…', 'waiting');
     const conn = peer.connect(hostId, { reliable: true });
     conn.on('open', () => wireDataConn(conn));
   }
@@ -310,7 +315,7 @@
     if (role === 'candidate') {
       connectToHost();
     } else {
-      connText.textContent = 'waiting for peer';
+      setConnStatus('waiting for peer', 'waiting');
     }
   });
 
@@ -319,23 +324,24 @@
   });
 
   peer.on('disconnected', () => {
-    connText.textContent = 'lost connection to server, reconnecting…';
+    setConnStatus('lost connection to server, reconnecting…', 'waiting');
     peer.reconnect();
   });
 
   peer.on('error', err => {
     console.error('peer error', err);
     if (err.type === 'peer-unavailable' && role === 'candidate') {
+      // The interviewer hasn't opened their room yet (or refreshed). Keep
+      // retrying rather than dead-ending — joining via the invite link
+      // before the interviewer is in the room is an expected flow.
       connectAttempts++;
-      if (connectAttempts < 5) {
-        setTimeout(connectToHost, 2000);
-      } else {
-        connText.textContent = 'room not found — check the code with your interviewer';
-      }
+      const delay = Math.min(2000 + connectAttempts * 500, 5000);
+      setTimeout(connectToHost, delay);
+      setConnStatus('waiting for the interviewer to let you in…', 'waiting');
     } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
-      connText.textContent = 'trouble reaching the signaling server — check your connection';
+      setConnStatus('trouble reaching the signaling server — check your connection', 'error');
     } else if (err.type === 'unavailable-id') {
-      connText.textContent = 'this room code is already in use — go back and create a new one';
+      setConnStatus('this room code is already in use — go back and create a new one', 'error');
     }
   });
 
@@ -343,10 +349,13 @@
   // restrictive NATs and even the TURN relay can't negotiate), surface that
   // instead of leaving the status stuck on a silent "connecting…".
   setTimeout(() => {
-    if (!dataConn || !dataConn.open) {
-      connText.textContent = role === 'candidate'
+    if (dataConn && dataConn.open) return;
+    if (role === 'candidate' && connectAttempts > 0) return; // already showing "waiting for the interviewer"
+    setConnStatus(
+      role === 'candidate'
         ? 'still trying to connect — this can take longer on some networks'
-        : 'still waiting for your candidate to connect';
-    }
+        : 'still waiting for your candidate to connect',
+      'waiting'
+    );
   }, 12000);
 })();
