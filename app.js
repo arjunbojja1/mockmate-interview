@@ -9,11 +9,11 @@
   // ---------- Sidebar tabs ----------
   const tabBtns = Array.from(document.querySelectorAll('.tab-btn'));
   const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
-  if (role !== 'interviewer') {
-    // Candidates never see the interviewer's solution/paste-activity or
-    // feedback tabs — hide the tabs themselves, not just their content.
-    document.getElementById('notesTabBtn').classList.add('hidden');
-    document.getElementById('feedbackTabBtn').classList.add('hidden');
+  if (role === 'interviewer') {
+    // Only the interviewer sees Notes (solution/paste-activity) and
+    // Feedback — both default to hidden in the markup.
+    document.getElementById('notesTabBtn').classList.remove('hidden');
+    document.getElementById('feedbackTabBtn').classList.remove('hidden');
   }
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
