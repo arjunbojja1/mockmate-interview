@@ -302,8 +302,12 @@ console.log(JSON.stringify(__mm_result));
   let testCases = [];
   let testcaseSyncTimer = null;
 
-  testcasePane.classList.remove('hidden');
-  if (role !== 'interviewer') {
+  if (role === 'interviewer') {
+    testcasePane.classList.remove('hidden');
+  } else {
+    // Stays hidden until the interviewer reveals the question — test
+    // cases are part of the question, not something to see early.
+    testcasePane.classList.add('hidden');
     addTestcaseBtn.classList.add('hidden');
     document.getElementById('testcaseHint').classList.add('hidden');
   }
@@ -376,7 +380,13 @@ console.log(JSON.stringify(__mm_result));
   }
   function syncTestcases() {
     if (role !== 'interviewer') return;
-    broadcast({ type: 'testcases', value: testCases.map(tc => ({ input: tc.input, expected: tc.expected })) });
+    // Only actually send the content once the question is revealed — before
+    // that, send an empty set so nothing leaks to the candidate early.
+    broadcast({
+      type: 'testcases',
+      value: questionVisible ? testCases.map(tc => ({ input: tc.input, expected: tc.expected })) : [],
+      visible: questionVisible,
+    });
   }
 
   if (role === 'interviewer') {
@@ -433,6 +443,7 @@ console.log(JSON.stringify(__mm_result));
       revealBtn.textContent = questionVisible ? 'Hide from candidate' : 'Show to candidate';
       revealBtn.classList.toggle('active', questionVisible);
       broadcast({ type: 'question', value: questionArea.value, visible: questionVisible });
+      syncTestcases();
     });
   }
 
@@ -810,7 +821,11 @@ console.log(JSON.stringify(__mm_result));
     conn.send({ type: 'timer-sync', startTime });
     conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
     conn.send({ type: 'meta', value: currentMeta });
-    conn.send({ type: 'testcases', value: testCases.map(tc => ({ input: tc.input, expected: tc.expected })) });
+    conn.send({
+      type: 'testcases',
+      value: questionVisible ? testCases.map(tc => ({ input: tc.input, expected: tc.expected })) : [],
+      visible: questionVisible,
+    });
     conn.send({ type: 'code', value: editor.getValue() });
     conn.send({ type: 'lang', value: langSelect.value });
     conn.send({ type: 'verdict', value: currentVerdict });
@@ -977,6 +992,7 @@ console.log(JSON.stringify(__mm_result));
       case 'testcases':
         testCases = (msg.value || []).map(tc => ({ input: tc.input, expected: tc.expected }));
         renderTestcases();
+        if (role === 'candidate') testcasePane.classList.toggle('hidden', !msg.visible);
         break;
       case 'meta':
         currentMeta = msg.value || { difficulty: '' };
