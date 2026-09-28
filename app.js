@@ -980,6 +980,36 @@ console.log(JSON.stringify(__mm_result));
     return { difficulty, description, testCases, signature };
   }
 
+  // Auto-fetch via alfa-leetcode-api (github.com/alfaarghya/alfa-leetcode-api):
+  // an established, MIT-licensed, CORS-open community wrapper around
+  // LeetCode's GraphQL endpoint (verified: 800+ stars, 17+ contributors,
+  // access-control-allow-origin: * confirmed directly against it). It only
+  // serves problems LeetCode itself shows to any visitor for free
+  // (isPaidOnly ones come back empty) — same public content the paste flow
+  // already reads, just fetched instead of typed in. It doesn't expose
+  // per-language starter code, so the function-signature detection still
+  // only runs on a manual paste that includes the code panel.
+  function extractLeetCodeSlug(url) {
+    const m = url.match(/leetcode\.com\/problems\/([a-z0-9-]+)/i);
+    return m ? m[1] : null;
+  }
+
+  async function fetchLeetCodeQuestion(slug) {
+    const res = await fetch(`https://alfa-leetcode-api.onrender.com/select?titleSlug=${encodeURIComponent(slug)}`);
+    if (!res.ok) throw new Error(`request failed (${res.status})`);
+    return res.json();
+  }
+
+  function htmlToPlainText(html) {
+    const withBreaks = html
+      .replace(/<\/(p|div|li|pre)>/gi, '\n\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<li>/gi, '• ');
+    const div = document.createElement('div');
+    div.innerHTML = withBreaks;
+    return div.textContent.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   const importPanel = document.getElementById('importPanel');
   if (role === 'interviewer') {
     document.getElementById('importLeetcodeBtn').addEventListener('click', () => {
@@ -988,15 +1018,7 @@ console.log(JSON.stringify(__mm_result));
     document.getElementById('importCancelBtn').addEventListener('click', () => {
       importPanel.classList.add('hidden');
     });
-    document.getElementById('importConfirmBtn').addEventListener('click', () => {
-      const url = document.getElementById('importUrlInput').value.trim();
-      const pasted = document.getElementById('importPasteArea').value.trim();
-      if (!pasted) {
-        alert('Paste the problem page first — LeetCode blocks fetching it automatically from another site, so bring the text over yourself.');
-        return;
-      }
-
-      const parsed = parseLeetCodePaste(pasted);
+    function applyImportedQuestion(parsed, url, sourceLabel) {
       const composed = url ? `Source: ${url}\n\n${parsed.description}` : parsed.description;
       questionArea.value = composed;
       if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
@@ -1008,7 +1030,8 @@ console.log(JSON.stringify(__mm_result));
         broadcast({ type: 'meta', value: currentMeta });
       }
 
-      if (parsed.testCases.length && !testCases.length) {
+      const hadExistingCases = testCases.length > 0;
+      if (parsed.testCases.length && !hadExistingCases) {
         testCases = parsed.testCases;
         renderTestcases();
         syncTestcases();
@@ -1026,12 +1049,53 @@ console.log(JSON.stringify(__mm_result));
       if (parsed.testCases.length) summary.push(`${parsed.testCases.length} test case${parsed.testCases.length === 1 ? '' : 's'}`);
       if (parsed.signature) summary.push('starter code');
       if (summary.length) {
-        outputPane.textContent = `Imported from paste: ${summary.join(', ')}.` + (testCases.length && !parsed.testCases.length ? ' (test cases already had entries, left them alone.)' : '');
+        outputPane.textContent = `Imported ${sourceLabel}: ${summary.join(', ')}.` + (hadExistingCases && parsed.testCases.length ? ' (test cases already had entries, left them alone.)' : '');
       }
 
       importPanel.classList.add('hidden');
       document.getElementById('importUrlInput').value = '';
       document.getElementById('importPasteArea').value = '';
+    }
+
+    document.getElementById('importConfirmBtn').addEventListener('click', () => {
+      const url = document.getElementById('importUrlInput').value.trim();
+      const pasted = document.getElementById('importPasteArea').value.trim();
+      if (!pasted) {
+        alert('Paste the problem page first, or use Fetch above.');
+        return;
+      }
+      applyImportedQuestion(parseLeetCodePaste(pasted), url, 'from paste');
+    });
+
+    document.getElementById('importFetchBtn').addEventListener('click', async () => {
+      const urlInput = document.getElementById('importUrlInput');
+      const url = urlInput.value.trim();
+      const slug = extractLeetCodeSlug(url);
+      if (!slug) {
+        alert('Paste a LeetCode problem URL first, e.g. https://leetcode.com/problems/two-sum/');
+        return;
+      }
+      const btn = document.getElementById('importFetchBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Fetching…';
+      try {
+        const data = await fetchLeetCodeQuestion(slug);
+        if (!data || data.isPaidOnly || !data.question) {
+          alert("Couldn't get that problem — it may be premium-only (the free API can't return those). Paste it manually below instead.");
+          return;
+        }
+        const text = htmlToPlainText(data.question);
+        const parsed = parseLeetCodePaste(text);
+        parsed.difficulty = (data.difficulty || parsed.difficulty || '').toLowerCase();
+        parsed.description = text;
+        applyImportedQuestion(parsed, url, 'from LeetCode');
+      } catch (e) {
+        alert('Could not fetch that problem (' + e.message + '). Paste it manually below instead.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
     });
   }
 

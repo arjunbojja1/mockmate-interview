@@ -947,6 +947,13 @@ body.room {
   color: var(--ink-soft);
 }
 
+.import-fetch-row {
+  display: flex;
+  gap: 8px;
+}
+.import-fetch-row input { flex: 1; }
+.import-fetch-row .mini-btn { flex-shrink: 0; }
+
 .import-panel input,
 .import-panel textarea {
   width: 100%;
