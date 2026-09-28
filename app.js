@@ -108,16 +108,63 @@
 
   // ---------- Question pane ----------
   const questionArea = document.getElementById('questionArea');
+  const revealBtn = document.getElementById('revealBtn');
+  const interviewerQuestionActions = document.getElementById('interviewerQuestionActions');
+  const candidateHiddenNote = document.getElementById('candidateHiddenNote');
+  let questionVisible = false;
+
   if (role === 'candidate') {
     questionArea.readOnly = true;
-    questionArea.placeholder = 'Waiting for the interviewer to add a question…';
+    questionArea.placeholder = "The interviewer hasn't shared the question yet.";
+    interviewerQuestionActions.classList.add('hidden');
+    candidateHiddenNote.classList.remove('hidden');
   }
 
   let suppressQuestionEmit = false;
   questionArea.addEventListener('input', () => {
     if (suppressQuestionEmit || role !== 'interviewer') return;
-    broadcast({ type: 'question', value: questionArea.value });
+    if (questionVisible) broadcast({ type: 'question', value: questionArea.value, visible: true });
   });
+
+  if (role === 'interviewer') {
+    revealBtn.addEventListener('click', () => {
+      questionVisible = !questionVisible;
+      revealBtn.textContent = questionVisible ? 'Hide from candidate' : 'Show to candidate';
+      revealBtn.classList.toggle('active', questionVisible);
+      broadcast({ type: 'question', value: questionArea.value, visible: questionVisible });
+    });
+  }
+
+  // ---------- Solution pane (interviewer only, never broadcast) ----------
+  const solutionPane = document.getElementById('solutionPane');
+  if (role === 'interviewer') {
+    solutionPane.classList.remove('hidden');
+  }
+
+  // ---------- Import from LeetCode ----------
+  const importPanel = document.getElementById('importPanel');
+  if (role === 'interviewer') {
+    document.getElementById('importLeetcodeBtn').addEventListener('click', () => {
+      importPanel.classList.toggle('hidden');
+    });
+    document.getElementById('importCancelBtn').addEventListener('click', () => {
+      importPanel.classList.add('hidden');
+    });
+    document.getElementById('importConfirmBtn').addEventListener('click', () => {
+      const url = document.getElementById('importUrlInput').value.trim();
+      const pasted = document.getElementById('importPasteArea').value.trim();
+      if (!pasted) {
+        alert('Paste the problem statement first — LeetCode blocks fetching it automatically from another site, so bring the text over yourself.');
+        return;
+      }
+      const composed = url ? `Source: ${url}\n\n${pasted}` : pasted;
+      questionArea.value = composed;
+      importPanel.classList.add('hidden');
+      document.getElementById('importUrlInput').value = '';
+      document.getElementById('importPasteArea').value = '';
+      if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
+    });
+  }
 
   // ---------- Verdict controls (interviewer only) ----------
   const verdictPane = document.getElementById('verdictPane');
@@ -172,7 +219,7 @@
       conn.send({ type: 'hello', name: myName, role });
       if (role === 'interviewer') {
         conn.send({ type: 'timer-sync', startTime });
-        if (questionArea.value) conn.send({ type: 'question', value: questionArea.value });
+        conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
       }
     });
     conn.on('data', handleData);
@@ -207,7 +254,13 @@
         break;
       case 'question':
         suppressQuestionEmit = true;
-        questionArea.value = msg.value;
+        if (msg.visible) {
+          questionArea.value = msg.value;
+          if (role === 'candidate') candidateHiddenNote.classList.add('hidden');
+        } else if (role === 'candidate') {
+          questionArea.value = '';
+          candidateHiddenNote.classList.remove('hidden');
+        }
         suppressQuestionEmit = false;
         break;
       case 'verdict':

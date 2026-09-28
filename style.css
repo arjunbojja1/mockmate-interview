@@ -312,7 +312,7 @@ body.room {
 .main-layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: 1fr 340px;
   min-height: 0;
 }
 
@@ -392,6 +392,7 @@ body.room {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   background: var(--paper-raised);
 }
 
@@ -402,6 +403,42 @@ body.room {
   letter-spacing: 0.02em;
 }
 
+.side-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 8px;
+  flex-wrap: wrap;
+}
+.side-header-row .side-header { padding: 0; }
+
+.question-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.hidden-note {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.mini-btn {
+  background: #fff;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.mini-btn:hover { border-color: var(--ink); }
+.mini-btn.reveal { background: var(--blue); border-color: var(--blue); color: #fff; }
+.mini-btn.reveal:hover { background: var(--blue-deep); }
+.mini-btn.reveal.active { background: var(--green); border-color: var(--green); }
+
 .question-pane {
   border-bottom: 1px solid var(--rule);
   display: flex;
@@ -411,7 +448,7 @@ body.room {
 
 #questionArea {
   width: 100%;
-  height: 130px;
+  height: 150px;
   resize: vertical;
   border: none;
   border-top: 1px solid var(--rule);
@@ -430,6 +467,58 @@ body.room {
   color: var(--ink-soft);
   cursor: default;
 }
+
+.import-panel {
+  border-top: 1px solid var(--rule);
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import-panel input,
+.import-panel textarea {
+  width: 100%;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.import-panel textarea {
+  height: 110px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.solution-pane {
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+
+#solutionArea {
+  width: 100%;
+  height: 90px;
+  resize: vertical;
+  border: none;
+  border-top: 1px solid #E8D9A8;
+  background: #FBF6E6;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 12px 16px;
+}
+#solutionArea:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
 .verdict-pane {
   border-bottom: 1px solid var(--rule);

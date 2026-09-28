@@ -42,8 +42,29 @@
 
     <div class="side-pane">
       <div class="question-pane">
-        <div class="side-header">question</div>
-        <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here — the candidate sees this live."></textarea>
+        <div class="side-header-row">
+          <span class="side-header">question</span>
+          <div class="question-actions" id="interviewerQuestionActions">
+            <button class="mini-btn" id="importLeetcodeBtn">Import from LeetCode</button>
+            <button class="mini-btn reveal" id="revealBtn">Show to candidate</button>
+          </div>
+          <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
+        </div>
+        <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
+
+        <div class="import-panel hidden" id="importPanel">
+          <input id="importUrlInput" placeholder="LeetCode problem URL (optional, for reference)" autocomplete="off" />
+          <textarea id="importPasteArea" placeholder="Paste the problem statement copied from LeetCode here (LeetCode doesn't allow fetching it automatically, so paste it in)."></textarea>
+          <div class="import-actions">
+            <button class="mini-btn" id="importCancelBtn">Cancel</button>
+            <button class="mini-btn reveal" id="importConfirmBtn">Use this question</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="solution-pane hidden" id="solutionPane">
+        <div class="side-header">solution — only you see this</div>
+        <textarea id="solutionArea" placeholder="Jot the expected approach, complexity, or reference solution. Never sent to the candidate."></textarea>
       </div>
 
       <div class="verdict-pane" id="verdictPane">
