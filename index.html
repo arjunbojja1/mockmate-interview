@@ -48,6 +48,15 @@
       <button class="link-btn" id="backFromCandidate">back</button>
     </div>
 
+    <button class="link-btn" id="historyLink">Past sessions</button>
+
+    <div class="panel hidden" id="historyPanel">
+      <h2>Past sessions</h2>
+      <p class="hint">Saved only in this browser — never sent anywhere.</p>
+      <div id="historyList"></div>
+      <button class="link-btn" id="backFromHistory">back</button>
+    </div>
+
     <footer>Practice tool for mock interviews — not affiliated with any interview platform.</footer>
   </div>
 
@@ -122,6 +131,50 @@ if (prefillRoom) {
   document.getElementById('joinCodeInput').value = prefillRoom.toUpperCase();
   document.getElementById('candidateNameInput').focus();
 }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const historyPanel = document.getElementById('historyPanel');
+const historyList = document.getElementById('historyList');
+
+document.getElementById('historyLink').addEventListener('click', () => {
+  roleCards.classList.add('hidden');
+  interviewerPanel.classList.add('hidden');
+  candidatePanel.classList.add('hidden');
+  historyPanel.classList.remove('hidden');
+
+  let entries = [];
+  try { entries = JSON.parse(localStorage.getItem('mockmate-history') || '[]'); } catch {}
+
+  if (!entries.length) {
+    historyList.innerHTML = '<p class="hint">No past sessions yet — they\'re saved here after you leave or reset a room as the interviewer.</p>';
+    return;
+  }
+
+  historyList.innerHTML = entries.map(e => {
+    const verdictLabel = e.verdict === 'pass' ? 'Pass' : e.verdict === 'fail' ? 'No pass' : 'Not set';
+    const scores = Object.entries(e.scores || {}).map(([k, v]) => `${escapeHtml(k)}: ${v}/4`).join(' · ');
+    return `
+      <div class="history-entry">
+        <div class="history-entry-top">
+          <span class="history-entry-name">${escapeHtml(e.candidateName || 'Candidate')}</span>
+          <span class="verdict-badge ${e.verdict === 'pass' ? 'pass' : e.verdict === 'fail' ? 'fail' : ''}">${verdictLabel}</span>
+        </div>
+        <div class="history-entry-meta">${new Date(e.date).toLocaleString()}${e.durationMin != null ? ' · ' + e.durationMin + ' min' : ''}${e.difficulty ? ' · ' + escapeHtml(e.difficulty) : ''}</div>
+        ${e.questionSnippet ? `<div class="history-entry-question">${escapeHtml(e.questionSnippet)}</div>` : ''}
+        ${scores ? `<div class="history-entry-scores">${scores}</div>` : ''}
+        ${e.summary ? `<div class="history-entry-summary">${escapeHtml(e.summary)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+});
+
+document.getElementById('backFromHistory').addEventListener('click', () => {
+  historyPanel.classList.add('hidden');
+  roleCards.classList.remove('hidden');
+});
 
 </script>
 </body>

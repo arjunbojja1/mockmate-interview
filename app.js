@@ -25,7 +25,11 @@
     tabSize: 4,
     indentUnit: 4,
     readOnly: role === 'candidate', // locked until the interviewer admits them
-    value: ''
+    value: '',
+    extraKeys: {
+      'Cmd-Enter': () => runCode(),
+      'Ctrl-Enter': () => runCode(),
+    },
   });
   editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
 
@@ -340,8 +344,42 @@
     });
   }
 
+  // ---------- Difficulty + tags ----------
+  const questionMeta = document.getElementById('questionMeta');
+  const questionBadges = document.getElementById('questionBadges');
+  const difficultySelect = document.getElementById('difficultySelect');
+  const tagsInput = document.getElementById('tagsInput');
+  let currentMeta = { difficulty: '', tags: '' };
+
+  function renderQuestionBadges(meta) {
+    questionBadges.innerHTML = '';
+    const items = [];
+    if (meta.difficulty) items.push({ text: meta.difficulty, cls: 'difficulty-' + meta.difficulty });
+    (meta.tags || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => items.push({ text: t, cls: 'tag' }));
+    items.forEach(item => {
+      const span = document.createElement('span');
+      span.className = 'question-badge ' + item.cls;
+      span.textContent = item.text;
+      questionBadges.appendChild(span);
+    });
+    questionBadges.classList.toggle('hidden', items.length === 0);
+  }
+
+  if (role === 'candidate') {
+    questionMeta.classList.add('hidden');
+  } else {
+    function syncMeta() {
+      currentMeta = { difficulty: difficultySelect.value, tags: tagsInput.value };
+      renderQuestionBadges(currentMeta);
+      broadcast({ type: 'meta', value: currentMeta });
+    }
+    difficultySelect.addEventListener('change', syncMeta);
+    tagsInput.addEventListener('input', syncMeta);
+  }
+
   // ---------- Solution pane (interviewer only, never broadcast) ----------
   const solutionPane = document.getElementById('solutionPane');
+  const solutionArea = document.getElementById('solutionArea');
   if (role === 'interviewer') {
     solutionPane.classList.remove('hidden');
   }
@@ -394,6 +432,67 @@
   const FEEDBACK_CATEGORIES = ['Problem solving', 'Coding', 'Communication'];
   const feedbackScores = {};
   let currentVerdict = null;
+  let candidateDisplayName = '';
+
+  function buildSessionSummary() {
+    const lines = [`MockMate session — room ${room}`, `Date: ${new Date().toLocaleString()}`];
+    if (candidateDisplayName) lines.push(`Candidate: ${candidateDisplayName}`);
+    if (startTime) {
+      const mins = Math.round((Date.now() - startTime) / 60000);
+      lines.push(`Duration: ${mins} min`);
+    }
+    if (currentMeta.difficulty || currentMeta.tags) {
+      lines.push(`Question: ${[currentMeta.difficulty, currentMeta.tags].filter(Boolean).join(' · ')}`);
+    }
+    lines.push('');
+    FEEDBACK_CATEGORIES.forEach(cat => {
+      lines.push(`${cat}: ${feedbackScores[cat] ? feedbackScores[cat] + '/4' : 'not rated'}`);
+    });
+    lines.push('');
+    lines.push(`Overall: ${currentVerdict === 'pass' ? 'Pass' : currentVerdict === 'fail' ? 'No pass' : 'Not set'}`);
+    const summary = feedbackSummary.value.trim();
+    if (summary) { lines.push(''); lines.push('Summary:'); lines.push(summary); }
+    if (questionArea.value.trim()) {
+      lines.push('');
+      lines.push('Question:');
+      lines.push(questionArea.value.trim());
+    }
+    lines.push('');
+    lines.push(`Final code (${LANGS[langSelect.value].label}):`);
+    lines.push(editor.getValue());
+    return {
+      text: lines.join('\n'),
+      record: {
+        date: new Date().toISOString(),
+        room,
+        candidateName: candidateDisplayName || null,
+        durationMin: startTime ? Math.round((Date.now() - startTime) / 60000) : null,
+        difficulty: currentMeta.difficulty || null,
+        tags: currentMeta.tags || null,
+        scores: { ...feedbackScores },
+        verdict: currentVerdict,
+        summary: summary || null,
+        questionSnippet: questionArea.value.trim().slice(0, 140),
+      },
+    };
+  }
+
+  function saveSessionToHistory() {
+    if (role !== 'interviewer') return;
+    const { record } = buildSessionSummary();
+    const hasContent = record.verdict || record.summary || Object.keys(record.scores).length > 0;
+    if (!hasContent) return; // nothing happened yet — don't clutter history
+    try {
+      const existing = JSON.parse(localStorage.getItem('mockmate-history') || '[]');
+      existing.unshift(record);
+      localStorage.setItem('mockmate-history', JSON.stringify(existing.slice(0, 50)));
+    } catch {}
+  }
+
+  document.getElementById('leaveLink').addEventListener('click', e => {
+    if (role !== 'interviewer') return;
+    saveSessionToHistory();
+  });
 
   if (role !== 'interviewer') {
     feedbackPane.classList.add('hidden');
@@ -428,24 +527,57 @@
     document.getElementById('clearVerdictBtn').addEventListener('click', () => setVerdict(null));
 
     document.getElementById('copyFeedbackBtn').addEventListener('click', async e => {
-      const lines = [`MockMate feedback — room ${room}`, ''];
-      FEEDBACK_CATEGORIES.forEach(cat => {
-        lines.push(`${cat}: ${feedbackScores[cat] ? feedbackScores[cat] + '/4' : 'not rated'}`);
-      });
-      lines.push('');
-      lines.push(`Overall: ${currentVerdict === 'pass' ? 'Pass' : currentVerdict === 'fail' ? 'No pass' : 'Not set'}`);
-      const summary = feedbackSummary.value.trim();
-      if (summary) { lines.push(''); lines.push('Summary:'); lines.push(summary); }
-      const text = lines.join('\n');
+      const { text } = buildSessionSummary();
       const btn = e.currentTarget;
       const original = btn.textContent;
       try {
         await navigator.clipboard.writeText(text);
         btn.textContent = 'Copied';
       } catch {
-        window.prompt('Copy this feedback:', text);
+        window.prompt('Copy this summary:', text);
       }
       setTimeout(() => { btn.textContent = original; }, 1800);
+    });
+
+    document.getElementById('resetRoomBtn').addEventListener('click', () => {
+      if (!confirm('Reset the room for the next candidate? This clears the code, question, test cases, and feedback, and disconnects the current candidate.')) return;
+      saveSessionToHistory();
+      if (dataConn) {
+        dataConn.send({ type: 'kicked' });
+        dataConn.close();
+        dataConn = null;
+      }
+      updateEndAccessVisibility();
+
+      suppressEmit = true;
+      editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
+      suppressEmit = false;
+      langSelect.value = 'python';
+      editor.setOption('mode', LANGS.python.cmMode);
+      outputPane.textContent = 'Output shows up here once you run your code.';
+
+      questionArea.value = '';
+      questionVisible = false;
+      revealBtn.textContent = 'Show to candidate';
+      revealBtn.classList.remove('active');
+      difficultySelect.value = '';
+      tagsInput.value = '';
+      currentMeta = { difficulty: '', tags: '' };
+      renderQuestionBadges(currentMeta);
+
+      testCases = [];
+      renderTestcases();
+
+      solutionArea.value = '';
+      pasteLogList.innerHTML = '<div class="paste-log-empty">No large pastes yet.</div>';
+
+      FEEDBACK_CATEGORIES.forEach(cat => delete feedbackScores[cat]);
+      feedbackScoresEl.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      feedbackSummary.value = '';
+      setVerdict(null);
+
+      startTimer(Date.now());
+      setConnStatus('waiting for peer', 'waiting');
     });
   }
 
@@ -561,10 +693,17 @@
   function sendFullState(conn) {
     conn.send({ type: 'timer-sync', startTime });
     conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
+    conn.send({ type: 'meta', value: currentMeta });
     conn.send({ type: 'testcases', value: testCases.map(tc => ({ input: tc.input, expected: tc.expected })) });
     conn.send({ type: 'code', value: editor.getValue() });
     conn.send({ type: 'lang', value: langSelect.value });
     conn.send({ type: 'verdict', value: currentVerdict });
+  }
+
+  const endAccessBtn = document.getElementById('endAccessBtn');
+  function updateEndAccessVisibility() {
+    if (role !== 'interviewer') return;
+    endAccessBtn.classList.toggle('hidden', !(dataConn && dataConn.open));
   }
 
   if (role === 'interviewer') {
@@ -578,6 +717,7 @@
       conn.send({ type: 'hello', name: myName, role });
       sendFullState(conn);
       setConnStatus('connected', 'connected');
+      updateEndAccessVisibility();
     });
     document.getElementById('denyBtn').addEventListener('click', () => {
       if (!pendingConn) return;
@@ -586,6 +726,14 @@
       pendingConn = null;
       admitBanner.classList.add('hidden');
       setConnStatus('waiting for peer', 'waiting');
+    });
+    endAccessBtn.addEventListener('click', () => {
+      if (!dataConn) return;
+      dataConn.send({ type: 'kicked' });
+      dataConn.close();
+      dataConn = null;
+      setConnStatus('waiting for peer', 'waiting');
+      updateEndAccessVisibility();
     });
   }
 
@@ -632,6 +780,7 @@
         clearRemoteCursor();
         dataConn = null;
         admitted = role === 'interviewer';
+        updateEndAccessVisibility();
         if (role === 'candidate' && !deniedPermanently) {
           editor.setOption('readOnly', true);
           setTimeout(connectToHost, 1500);
@@ -652,6 +801,7 @@
       case 'join-request':
         if (role !== 'interviewer') break;
         remoteName = `${msg.name} (candidate)`;
+        candidateDisplayName = msg.name;
         admitBannerText.textContent = `${msg.name} wants to join the room.`;
         admitBanner.classList.remove('hidden');
         setConnStatus(`${msg.name} is waiting to be let in`, 'waiting');
@@ -670,6 +820,12 @@
             : "the interviewer didn't let you in — check with them and refresh to try again",
           'error'
         );
+        break;
+      case 'kicked':
+        editor.setOption('readOnly', true);
+        deniedPermanently = true;
+        admitted = false;
+        setConnStatus('the interviewer ended your access — refresh to ask again', 'error');
         break;
       case 'hello':
         remoteName = `${msg.name} (${msg.role})`;
@@ -706,6 +862,10 @@
         testCases = (msg.value || []).map(tc => ({ input: tc.input, expected: tc.expected }));
         renderTestcases();
         break;
+      case 'meta':
+        currentMeta = msg.value || { difficulty: '', tags: '' };
+        renderQuestionBadges(currentMeta);
+        break;
       case 'paste-flag':
         if (role === 'interviewer') logPasteEvent(msg.chars, msg.at);
         break;
@@ -720,7 +880,14 @@
     const hostId = `mockmate-${room}`;
     setConnStatus(connectAttempts === 0 ? 'connecting…' : 'waiting for the interviewer to join…', 'waiting');
     const conn = peer.connect(hostId, { reliable: true });
-    conn.on('open', () => wireDataConn(conn));
+    // Wire listeners immediately, synchronously — PeerJS's 'open' event is a
+    // one-time EventEmitter emission (confirmed in vendor/peerjs source:
+    // `this._open = true; this.emit("open")`), so a listener attached later,
+    // e.g. inside a `conn.on('open', () => wireDataConn(conn))` wrapper,
+    // would silently never fire if 'open' already happened. wireDataConn
+    // itself registers the real 'open' handler, so it must be called before
+    // that event can possibly fire, not after.
+    wireDataConn(conn);
   }
 
   peer.on('open', () => {

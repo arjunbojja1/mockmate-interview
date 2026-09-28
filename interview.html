@@ -19,8 +19,9 @@
       <button class="mini-btn hidden" id="copyRoomLink">Copy invite link</button>
       <span class="timer" id="timer">00:00</span>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer</span></span>
+      <button class="mini-btn deny hidden" id="endAccessBtn">End access</button>
       <span class="verdict-badge hidden" id="verdictBadge"></span>
-      <a href="index.html" class="leave-link">Leave</a>
+      <a href="index.html" class="leave-link" id="leaveLink">Leave</a>
     </div>
   </div>
 
@@ -61,6 +62,16 @@
           </div>
           <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
         </div>
+        <div class="question-meta" id="questionMeta">
+          <select id="difficultySelect">
+            <option value="">Difficulty</option>
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+          <input id="tagsInput" placeholder="tags, comma separated" autocomplete="off" />
+        </div>
+        <div class="question-badges hidden" id="questionBadges"></div>
         <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
 
         <div class="import-panel hidden" id="importPanel">
@@ -100,7 +111,8 @@
           <button class="verdict-btn fail" id="failBtn">No pass</button>
           <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
         </div>
-        <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy feedback as text</button>
+        <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy session summary</button>
+        <button class="mini-btn reset-room" id="resetRoomBtn">Reset for next candidate</button>
       </div>
     </div>
   </div>
@@ -118,6 +130,6 @@ window.addEventListener('error', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

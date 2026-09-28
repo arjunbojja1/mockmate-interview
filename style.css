@@ -244,6 +244,65 @@ footer {
   color: var(--ink-faint);
 }
 
+#historyLink {
+  margin-top: 28px;
+  font-size: 12px;
+}
+
+#historyList {
+  max-height: 50vh;
+  overflow-y: auto;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.history-entry {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.history-entry-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.history-entry-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.history-entry-meta {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+
+.history-entry-question {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+  font-style: italic;
+}
+
+.history-entry-scores {
+  font-size: 11.5px;
+  color: var(--blue);
+  margin-bottom: 4px;
+}
+
+.history-entry-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 /* ---------- Interview room ---------- */
 body.room {
   height: 100vh;
@@ -529,6 +588,41 @@ body.room {
   padding: 3px 8px;
 }
 
+.question-meta {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 10px;
+}
+.question-meta select, .question-meta input {
+  font-family: inherit;
+  font-size: 11.5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+  padding: 5px 8px;
+}
+.question-meta select { flex: 0 0 auto; }
+.question-meta input { flex: 1; min-width: 0; }
+
+.question-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+.question-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+.question-badge.difficulty-easy { background: #2F8F5B1f; color: var(--green); }
+.question-badge.difficulty-medium { background: #B8862E1f; color: var(--amber); }
+.question-badge.difficulty-hard { background: #B8453B1f; color: var(--red); }
+.question-badge.tag { background: var(--blue-wash); color: var(--blue); }
+
 .mini-btn {
   background: #fff;
   border: 1px solid var(--rule-strong);
@@ -543,6 +637,9 @@ body.room {
 .mini-btn.reveal { background: var(--blue); border-color: var(--blue); color: #fff; }
 .mini-btn.reveal:hover { background: var(--blue-deep); }
 .mini-btn.reveal.active { background: var(--green); border-color: var(--green); }
+.mini-btn.deny { color: var(--red); border-color: var(--red); background: #fff; }
+.mini-btn.deny:hover { background: var(--red); color: #fff; }
+.mini-btn.reset-room { color: var(--ink-soft); }
 
 .question-pane {
   --section-accent: var(--blue);
@@ -720,6 +817,11 @@ body.room {
 .verdict-btn.clear:hover { background: var(--paper); }
 
 .copy-feedback {
+  margin: 0 16px 8px;
+  width: calc(100% - 32px);
+}
+
+.reset-room {
   margin: 0 16px;
   width: calc(100% - 32px);
 }
