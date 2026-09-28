@@ -798,7 +798,7 @@ body.room {
 }
 
 .tab-panel { display: none; }
-.tab-panel.active { display: block; }
+.tab-panel.active { display: flex; flex-direction: column; height: 100%; }
 
 .side-header {
   padding: 16px 16px 8px;
@@ -905,15 +905,15 @@ body.room {
 .question-pane {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
 }
 
 #questionArea {
   width: 100%;
-  height: 150px;
-  max-height: 320px;
-  min-height: 90px;
-  resize: vertical;
+  flex: 1;
+  min-height: 0;
+  resize: none;
   border: none;
   border-top: 1px solid var(--rule);
   background: var(--paper);
@@ -1187,9 +1187,10 @@ body.room {
   h1 { font-size: 32px; }
   .role-cards { grid-template-columns: 1fr; }
 
-  /* Keep any one section from eating the whole panel on a short screen —
-     each scrolls internally instead. */
-  #questionArea, #solutionArea, #feedbackSummary, .testcase-row textarea {
+  /* Question now fills its own tab (see .tab-panel.active), so it's
+     excluded here; solution/feedback still share a tab with other
+     sections, so cap those from eating the whole panel on a short screen. */
+  #solutionArea, #feedbackSummary, .testcase-row textarea {
     resize: none;
     max-height: 140px;
   }
