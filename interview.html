@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=4" />
+<link rel="stylesheet" href="style.css?v=6" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 <link rel="stylesheet" href="vendor/codemirror/theme/dracula.min.css" />
 </head>
@@ -16,6 +16,7 @@
     </div>
     <div class="room-meta">
       <span>room <span class="room-code-chip" id="roomChip">------</span></span>
+      <button class="mini-btn hidden" id="copyRoomLink">Copy invite link</button>
       <span class="timer" id="timer">00:00</span>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer</span></span>
       <span class="verdict-badge hidden" id="verdictBadge"></span>
@@ -31,18 +32,21 @@
         <select id="langSelect">
           <option value="python" selected>Python</option>
           <option value="javascript">JavaScript</option>
-          <option value="text/x-c++src">C++</option>
-          <option value="text/x-java">Java</option>
+          <option value="cpp">C++</option>
+          <option value="java">Java</option>
         </select>
         <button class="run" id="runBtn">Run</button>
+        <button id="runTestsBtn">Run tests</button>
         <button id="clearOutputBtn">Clear output</button>
         <div class="spacer"></div>
       </div>
       <textarea id="codeArea"></textarea>
-      <div class="output-pane" id="outputPane">Output shows up here. Running code only works for JavaScript right now — other languages are for writing and talking through.</div>
+      <div class="output-pane" id="outputPane">Output shows up here once you run your code.</div>
     </div>
 
-    <div class="side-pane">
+    <div class="resize-handle" id="resizeHandle"></div>
+
+    <div class="side-pane" id="sidePane">
       <div class="question-pane">
         <div class="side-header-row">
           <span class="side-header">question</span>
@@ -64,18 +68,34 @@
         </div>
       </div>
 
+      <div class="testcase-pane hidden" id="testcasePane">
+        <div class="side-header-row">
+          <span class="side-header">test cases</span>
+          <button class="mini-btn" id="addTestcaseBtn">+ Add case</button>
+        </div>
+        <div id="testcaseList"></div>
+      </div>
+
       <div class="solution-pane hidden" id="solutionPane">
         <div class="side-header">solution — only you see this</div>
         <textarea id="solutionArea" placeholder="Jot the expected approach, complexity, or reference solution. Never sent to the candidate."></textarea>
       </div>
 
-      <div class="verdict-pane" id="verdictPane">
-        <div class="side-header">verdict</div>
+      <div class="paste-log hidden" id="pasteLog">
+        <div class="side-header">paste activity — only you see this</div>
+        <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No large pastes yet.</div></div>
+      </div>
+
+      <div class="feedback-pane hidden" id="feedbackPane">
+        <div class="side-header">feedback</div>
+        <div class="feedback-scores" id="feedbackScores"></div>
+        <textarea id="feedbackSummary" placeholder="Overall summary — strengths, gaps, would you move them forward?"></textarea>
         <div class="verdict-buttons">
           <button class="verdict-btn pass" id="passBtn">Pass</button>
           <button class="verdict-btn fail" id="failBtn">No pass</button>
           <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
         </div>
+        <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy feedback as text</button>
       </div>
     </div>
   </div>
@@ -93,6 +113,6 @@ window.addEventListener('error', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
