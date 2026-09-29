@@ -47,6 +47,8 @@
       'Ctrl-Enter': () => runOrTest(),
       'Cmd-Shift-F': () => formatCode(),
       'Ctrl-Shift-F': () => formatCode(),
+      'Cmd-/': 'toggleComment',
+      'Ctrl-/': 'toggleComment',
     },
   });
   editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
