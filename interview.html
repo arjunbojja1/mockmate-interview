@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=17" />
+<link rel="stylesheet" href="style.css?v=18" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -43,6 +43,14 @@
     </div>
   </div>
 
+  <div class="session-end-overlay hidden" id="sessionEndOverlay">
+    <div class="session-end-box">
+      <div class="session-end-title">You failed</div>
+      <p id="sessionEndReason">The interviewer marked this as a fail.</p>
+      <button class="mini-btn hidden" id="sessionEndResetBtn">Reset for next candidate</button>
+    </div>
+  </div>
+
   <div class="main-layout">
     <div class="editor-pane">
       <div class="editor-toolbar">
@@ -55,6 +63,7 @@
         <button class="run" id="runBtn">Run</button>
         <button id="runTestsBtn">Run tests</button>
         <button id="clearOutputBtn">Clear output</button>
+        <button id="formatCodeBtn" title="Reindent the code (Cmd/Ctrl+Shift+F)">Format</button>
         <div class="toolbar-spacer"></div>
         <button id="whiteboardToggle">Whiteboard</button>
       </div>
@@ -207,6 +216,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>

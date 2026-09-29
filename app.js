@@ -45,6 +45,8 @@
     extraKeys: {
       'Cmd-Enter': () => runOrTest(),
       'Ctrl-Enter': () => runOrTest(),
+      'Cmd-Shift-F': () => formatCode(),
+      'Ctrl-Shift-F': () => formatCode(),
     },
   });
   editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
@@ -69,6 +71,29 @@
       }
     }
   });
+
+  // ---------- Format code ----------
+  // Reindents every line using the active mode's own indentation rules and
+  // trims trailing whitespace. This is a real, honest "fix my indentation"
+  // pass, not a full style formatter (no Prettier/black/clang-format-level
+  // rewriting of spacing, line length, quote style, etc.) — CodeMirror's
+  // built-in mode-aware indent logic is what's actually available without
+  // pulling in a separate formatter per language.
+  function formatCode() {
+    const cursor = editor.getCursor();
+    editor.operation(() => {
+      for (let i = 0; i < editor.lineCount(); i++) editor.indentLine(i, 'smart');
+    });
+    const trimmed = editor.getValue().split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n');
+    if (trimmed !== editor.getValue()) {
+      suppressEmit = true;
+      editor.setValue(trimmed);
+      suppressEmit = false;
+    }
+    editor.setCursor(cursor);
+    broadcast({ type: 'code', value: editor.getValue() });
+  }
+  document.getElementById('formatCodeBtn').addEventListener('click', formatCode);
 
   // ---------- Remote cursor + selection indicator ----------
   const remoteRoleLabel = role === 'interviewer' ? 'Candidate' : 'Interviewer';
@@ -820,20 +845,34 @@ console.log(JSON.stringify(__mm_result));
     });
   }
 
-  // ---------- Timer ----------
+  // ---------- Timer (counts down from 45 min; hitting 0 auto-fails) ----------
   const timerEl = document.getElementById('timer');
+  const SESSION_DURATION_SEC = 45 * 60;
   let startTime = null;
   let timerInterval = null;
+  let sessionEnded = false;
+
+  function updateTimerDisplay() {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const remaining = Math.max(0, SESSION_DURATION_SEC - elapsed);
+    const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+    const s = String(remaining % 60).padStart(2, '0');
+    timerEl.textContent = `${m}:${s}`;
+    timerEl.classList.toggle('timer-warning', remaining > 0 && remaining <= 5 * 60);
+    if (remaining <= 0) {
+      clearInterval(timerInterval);
+      // The interviewer is the authority here — they broadcast the fail
+      // verdict (same path as clicking "No pass"), and the candidate reacts
+      // to that broadcast rather than independently declaring the end.
+      if (role === 'interviewer' && !sessionEnded && dataConn) setVerdict('fail', false, 'timeout');
+    }
+  }
 
   function startTimer(t0) {
     startTime = t0;
     if (timerInterval) clearInterval(timerInterval);
-    timerInterval = setInterval(() => {
-      const secs = Math.floor((Date.now() - startTime) / 1000);
-      const m = String(Math.floor(secs / 60)).padStart(2, '0');
-      const s = String(secs % 60).padStart(2, '0');
-      timerEl.textContent = `${m}:${s}`;
-    }, 1000);
+    updateTimerDisplay();
+    timerInterval = setInterval(updateTimerDisplay, 1000);
   }
 
   if (role === 'interviewer') {
@@ -1237,7 +1276,7 @@ console.log(JSON.stringify(__mm_result));
       setTimeout(() => { btn.textContent = original; }, 1800);
     });
 
-    document.getElementById('resetRoomBtn').addEventListener('click', () => {
+    function resetRoomForNextCandidate() {
       if (!confirm('Reset the room for the next candidate? This clears the code, question, test cases, and feedback, and disconnects the current candidate.')) return;
       saveSessionToHistory();
       if (dataConn) {
@@ -1277,14 +1316,40 @@ console.log(JSON.stringify(__mm_result));
       FEEDBACK_CATEGORIES.forEach(cat => delete feedbackScores[cat]);
       feedbackScoresEl.querySelectorAll('button').forEach(b => b.classList.remove('active'));
       feedbackSummary.value = '';
-      setVerdict(null);
+      setVerdict(null); // also un-ends the session if it had ended (timeout/fail)
 
       startTimer(Date.now());
       setConnStatus('waiting for peer', 'waiting');
-    });
+    }
+
+    document.getElementById('resetRoomBtn').addEventListener('click', resetRoomForNextCandidate);
+    document.getElementById('sessionEndResetBtn').addEventListener('click', resetRoomForNextCandidate);
   }
 
-  function setVerdict(value, fromPeer) {
+  function endSession(reason) {
+    if (sessionEnded) return;
+    sessionEnded = true;
+    if (timerInterval) clearInterval(timerInterval);
+    editor.setOption('readOnly', true);
+    mainLayoutEl.classList.add('hidden');
+    document.getElementById('sessionEndOverlay').classList.remove('hidden');
+    document.getElementById('sessionEndReason').textContent =
+      reason === 'timeout'
+        ? "Time's up — the 45-minute session ended automatically."
+        : 'The interviewer marked this as a fail.';
+    if (role === 'interviewer') document.getElementById('sessionEndResetBtn').classList.remove('hidden');
+  }
+
+  function unendSession() {
+    if (!sessionEnded) return;
+    sessionEnded = false;
+    document.getElementById('sessionEndOverlay').classList.add('hidden');
+    const candidateStillWaiting = role === 'candidate' && !admitted;
+    if (!candidateStillWaiting) mainLayoutEl.classList.remove('hidden');
+    if (role === 'interviewer') editor.setOption('readOnly', false);
+  }
+
+  function setVerdict(value, fromPeer, reason) {
     currentVerdict = value;
     if (value === 'pass') {
       verdictBadge.textContent = 'Pass';
@@ -1292,10 +1357,12 @@ console.log(JSON.stringify(__mm_result));
     } else if (value === 'fail') {
       verdictBadge.textContent = 'No pass';
       verdictBadge.className = 'verdict-badge fail';
+      endSession(reason || 'fail');
     } else {
       verdictBadge.className = 'verdict-badge hidden';
+      unendSession();
     }
-    if (!fromPeer) broadcast({ type: 'verdict', value });
+    if (!fromPeer) broadcast({ type: 'verdict', value, reason });
   }
 
   // ---------- In-room invite link (interviewer only) ----------
@@ -1546,6 +1613,7 @@ console.log(JSON.stringify(__mm_result));
         );
         break;
       case 'kicked':
+        unendSession();
         editor.setOption('readOnly', true);
         deniedPermanently = true;
         admitted = false;
@@ -1600,7 +1668,7 @@ console.log(JSON.stringify(__mm_result));
         }
         break;
       case 'verdict':
-        setVerdict(msg.value, true);
+        setVerdict(msg.value, true, msg.reason);
         break;
       case 'mode':
         setMode(msg.value, true);
