@@ -877,8 +877,22 @@ console.log(JSON.stringify(__mm_result));
     timerInterval = setInterval(updateTimerDisplay, 1000);
   }
 
+  function resetTimerDisplay() {
+    startTime = null;
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+    timerEl.textContent = '45:00';
+    timerEl.classList.remove('timer-warning');
+  }
+
+  const startTimerBtn = document.getElementById('startTimerBtn');
   if (role === 'interviewer') {
-    startTimer(Date.now());
+    startTimerBtn.classList.remove('hidden');
+    startTimerBtn.addEventListener('click', () => {
+      startTimer(Date.now());
+      broadcast({ type: 'timer-sync', startTime });
+      startTimerBtn.classList.add('hidden');
+    });
   }
 
   // ---------- Question pane ----------
@@ -1320,7 +1334,9 @@ console.log(JSON.stringify(__mm_result));
       feedbackSummary.value = '';
       setVerdict(null); // also un-ends the session if it had ended (timeout/fail)
 
-      startTimer(Date.now());
+      resetTimerDisplay();
+      startTimerBtn.classList.remove('hidden');
+      broadcast({ type: 'timer-sync', startTime: null });
       setConnStatus('waiting for peer', 'waiting');
     }
 
@@ -1639,7 +1655,10 @@ console.log(JSON.stringify(__mm_result));
         editor.setOption('mode', LANGS[msg.value].cmMode);
         break;
       case 'timer-sync':
-        if (role === 'candidate') startTimer(msg.startTime);
+        if (role === 'candidate') {
+          if (msg.startTime) startTimer(msg.startTime);
+          else resetTimerDisplay();
+        }
         break;
       case 'question':
         suppressQuestionEmit = true;
