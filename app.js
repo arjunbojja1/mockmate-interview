@@ -2,9 +2,27 @@
   const params = new URLSearchParams(window.location.search);
   const room = (params.get('room') || 'ROOM01').toUpperCase();
   const role = params.get('role') === 'interviewer' ? 'interviewer' : 'candidate';
-  const myName = params.get('name') || (role === 'interviewer' ? 'Interviewer' : 'Candidate');
+  // A candidate arriving from an invite link has no name yet; they're asked
+  // for one before knocking (see the name form near the PeerJS section).
+  let myName = (params.get('name') || '').trim() || (role === 'interviewer' ? 'Interviewer' : '');
 
   document.getElementById('roomChip').textContent = room;
+  if (role === 'candidate') {
+    document.getElementById('connText').textContent = 'Not connected yet';
+    document.getElementById('timer').classList.add('hidden'); // shown once the interviewer's clock syncs
+  }
+  const inviteLink = `${window.location.href.replace(/interview\.html.*$/, '').replace(/\/$/, '')}/interview.html?room=${encodeURIComponent(room)}&role=candidate`;
+
+  async function copyText(text, btn, doneLabel) {
+    const original = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = doneLabel || 'Copied';
+    } catch {
+      window.prompt('Copy this:', text);
+    }
+    setTimeout(() => { btn.textContent = original; }, 1800);
+  }
 
   // ---------- Sidebar tabs ----------
   const tabBtns = Array.from(document.querySelectorAll('.tab-btn'));
@@ -34,35 +52,168 @@
   };
 
   // ---------- CodeMirror ----------
+  const INDENT = 4;
+  const DEFAULT_PY_STARTER = '# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n';
+
+  // Python treats a tab and four spaces as different indentation, so a
+  // literal tab next to space-indented lines is a TabError (or silently the
+  // wrong block). Everything below keeps the buffer spaces-only.
+  function leadingWidth(s) {
+    let w = 0;
+    for (const ch of s) {
+      if (ch === ' ') w++;
+      else if (ch === '\t') w += INDENT - (w % INDENT);
+      else break;
+    }
+    return w;
+  }
+  function expandLeadingTabs(line) {
+    const m = line.match(/^[ \t]*/)[0];
+    return m.includes('\t') ? ' '.repeat(leadingWidth(m)) + line.slice(m.length) : line;
+  }
+
+  // Tab: indent the selection, or pad the cursor to the next indent stop.
+  function smartTab(cm) {
+    if (cm.somethingSelected()) {
+      const multiLine = cm.listSelections().some(r => r.anchor.line !== r.head.line);
+      if (multiLine) { cm.indentSelection('add'); return; }
+    }
+    cm.replaceSelections(cm.listSelections().map(r => {
+      const ch = Math.min(r.anchor.ch, r.head.ch);
+      return ' '.repeat(INDENT - (ch % INDENT));
+    }));
+  }
+
+  // Backspace inside leading whitespace removes a whole indent level, so
+  // deleting an indent is one keystroke, same as adding one.
+  function smartBackspace(cm) {
+    if (cm.somethingSelected()) return CodeMirror.Pass;
+    const ranges = cm.listSelections();
+    const allInIndent = ranges.every(r => {
+      const before = cm.getLine(r.head.line).slice(0, r.head.ch);
+      return r.head.ch > 0 && /^ +$/.test(before);
+    });
+    if (!allInIndent) return CodeMirror.Pass;
+    cm.operation(() => {
+      for (let i = ranges.length - 1; i >= 0; i--) {
+        const { line, ch } = ranges[i].head;
+        const target = Math.floor((ch - 1) / INDENT) * INDENT;
+        cm.replaceRange('', { line, ch: target }, { line, ch }, '+delete');
+      }
+    });
+  }
+
   const editor = CodeMirror.fromTextArea(document.getElementById('codeArea'), {
     mode: LANGS.python.cmMode,
-    theme: 'mockmate',
+    theme: 'onsite',
     lineNumbers: true,
-    tabSize: 4,
-    indentUnit: 4,
+    tabSize: INDENT,
+    indentUnit: INDENT,
+    indentWithTabs: false,
+    smartIndent: true,
+    electricChars: true,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    styleActiveLine: true,
     readOnly: role === 'candidate', // locked until the interviewer admits them
     value: '',
     extraKeys: {
+      'Tab': smartTab,
+      'Shift-Tab': 'indentLess',
+      'Backspace': smartBackspace,
+      'Cmd-]': 'indentMore',
+      'Ctrl-]': 'indentMore',
+      'Cmd-[': 'indentLess',
+      'Ctrl-[': 'indentLess',
       'Cmd-Enter': () => runOrTest(),
       'Ctrl-Enter': () => runOrTest(),
+      'Shift-Alt-F': () => formatCode(),
       'Cmd-Shift-F': () => formatCode(),
       'Ctrl-Shift-F': () => formatCode(),
       'Cmd-/': 'toggleComment',
       'Ctrl-/': 'toggleComment',
     },
   });
-  editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
+  editor.setValue(DEFAULT_PY_STARTER);
+  editor.clearHistory();
+
+  // Indent guides: a faint vertical rule at each indent level of a line's
+  // leading whitespace, so block structure (which *is* the syntax in
+  // Python) is visible at a glance.
+  editor.addOverlay({
+    token(stream) {
+      const lead = stream.string.match(/^ */)[0].length;
+      const start = stream.pos;
+      if (start < lead && start % INDENT === 0 && stream.match(' '.repeat(INDENT))) {
+        return start > 0 ? 'indent-guide' : null; // column 0 sits on the gutter edge
+      }
+      stream.skipToEnd();
+      return null;
+    },
+  });
+
+  // Re-indent multi-line pastes so the block lands at the cursor's indent
+  // level (keeping its internal structure), and expand any tabs in it.
+  editor.on('beforeChange', (cm, change) => {
+    if (change.origin !== 'paste' || !change.update) return;
+    let lines = change.text.map(expandLeadingTabs);
+    const prefix = cm.getLine(change.from.line).slice(0, change.from.ch);
+    if (lines.length > 1 && /^ *$/.test(prefix)) {
+      const target = prefix.length;
+      const rest = lines.slice(1).filter(l => l.trim());
+      const minRest = rest.length ? Math.min(...rest.map(leadingWidth)) : 0;
+      // The first line's original indent is only known when the copy
+      // started at the beginning of the line; otherwise infer it from the
+      // lines after it (one level shallower if it opens a block).
+      let firstIndent;
+      if (/^\s/.test(lines[0]) || !rest.length) firstIndent = leadingWidth(lines[0]);
+      else if (/[:{(\[]\s*(#.*)?$/.test(lines[0])) firstIndent = Math.max(0, minRest - INDENT);
+      else firstIndent = minRest;
+      const delta = target - firstIndent;
+      lines = lines.map((l, i) => {
+        if (i === 0) return l.replace(/^ */, '');
+        if (!l.trim()) return '';
+        const w = leadingWidth(l);
+        return ' '.repeat(Math.max(0, w + delta)) + l.slice(l.match(/^ */)[0].length);
+      });
+    }
+    change.update(change.from, change.to, lines);
+  });
 
   const langSelect = document.getElementById('langSelect');
   langSelect.addEventListener('change', () => {
     editor.setOption('mode', LANGS[langSelect.value].cmMode);
     broadcast({ type: 'lang', value: langSelect.value });
+    saveRoomStateSoon();
   });
 
+  // Edits go to the peer as range replacements rather than the whole
+  // document, so the receiver's cursor, scroll position, and undo history
+  // stay intact. Each message also carries the full resulting text, so a
+  // receiver can tell when both sides typed at once and reconcile (see
+  // applyRemoteCode).
   let suppressEmit = false;
+  let pendingOps = [];
+  let opFlushScheduled = false;
+  function flushCodeOps() {
+    opFlushScheduled = false;
+    if (!pendingOps.length) return;
+    broadcast({ type: 'code-ops', ops: pendingOps, value: editor.getValue() });
+    pendingOps = [];
+  }
   editor.on('change', (cm, changeObj) => {
     if (suppressEmit) return;
-    broadcast({ type: 'code', value: editor.getValue() });
+    // Plain objects only — PeerJS's binary serializer rejects class
+    // instances like CodeMirror's Pos.
+    pendingOps.push({
+      from: { line: changeObj.from.line, ch: changeObj.from.ch },
+      to: { line: changeObj.to.line, ch: changeObj.to.ch },
+      text: changeObj.text.slice(),
+    });
+    if (!opFlushScheduled) {
+      opFlushScheduled = true;
+      Promise.resolve().then(flushCodeOps);
+    }
 
     // Flag large pastes from the candidate so the interviewer has a
     // low-friction signal, without capturing clipboard content itself.
@@ -74,28 +225,130 @@
     }
   });
 
-  // ---------- Format code ----------
-  // Reindents every line using the active mode's own indentation rules and
-  // trims trailing whitespace. This is a real, honest "fix my indentation"
-  // pass, not a full style formatter (no Prettier/black/clang-format-level
-  // rewriting of spacing, line length, quote style, etc.) — CodeMirror's
-  // built-in mode-aware indent logic is what's actually available without
-  // pulling in a separate formatter per language.
-  function formatCode() {
-    const cursor = editor.getCursor();
-    editor.operation(() => {
-      for (let i = 0; i < editor.lineCount(); i++) editor.indentLine(i, 'smart');
-    });
-    const trimmed = editor.getValue().split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n');
-    if (trimmed !== editor.getValue()) {
-      suppressEmit = true;
-      editor.setValue(trimmed);
+  function applyRemoteCode(ops, value) {
+    suppressEmit = true;
+    try {
+      if (ops) {
+        editor.operation(() => {
+          ops.forEach(op => editor.replaceRange(op.text.join('\n'), op.from, op.to, 'remote'));
+        });
+      }
+      if (editor.getValue() !== value) {
+        // Both sides edited at once. The interviewer's copy is the
+        // tiebreaker: it keeps its best-effort merge (the peer's ops applied
+        // on top of its own edit) and sends that back; the candidate adopts
+        // whatever the interviewer sends.
+        if (ops && role === 'interviewer') {
+          broadcast({ type: 'code', value: editor.getValue() });
+          return;
+        }
+        const cursor = editor.getCursor();
+        const scroll = editor.getScrollInfo();
+        editor.setValue(value);
+        editor.setCursor(clampPos(cursor.line, cursor.ch));
+        editor.scrollTo(scroll.left, scroll.top);
+      }
+    } finally {
       suppressEmit = false;
     }
-    editor.setCursor(cursor);
-    broadcast({ type: 'code', value: editor.getValue() });
   }
-  document.getElementById('formatCodeBtn').addEventListener('click', formatCode);
+
+  // Replaces the whole buffer as one undoable edit (unlike setValue, which
+  // the peer would see as a full rewrite and which jumps the cursor).
+  function replaceAllCode(text) {
+    const cursor = editor.getCursor();
+    const scroll = editor.getScrollInfo();
+    const last = editor.lastLine();
+    editor.replaceRange(text, { line: 0, ch: 0 }, { line: last, ch: editor.getLine(last).length }, '+format');
+    editor.setCursor(clampPos(cursor.line, cursor.ch));
+    editor.scrollTo(scroll.left, scroll.top);
+  }
+
+  // ---------- Format code ----------
+  // Real formatters compiled to WebAssembly, loaded on first use: Ruff
+  // (Black-compatible) for Python, clang-format for C++/Java/JavaScript.
+  // Both reject code that doesn't parse rather than guessing, so a syntax
+  // error is reported instead of silently mangling the code.
+  const formatterCache = {};
+  function loadFormatter(kind) {
+    if (!formatterCache[kind]) {
+      formatterCache[kind] = (async () => {
+        if (kind === 'ruff') {
+          const mod = await import('./vendor/ruff-fmt/ruff_fmt_web.js');
+          await mod.default(new URL('vendor/ruff-fmt/ruff_fmt_bg.wasm', document.baseURI));
+          return mod;
+        }
+        const mod = await import('./vendor/clang-format/clang-format-web.js');
+        await mod.default(new URL('vendor/clang-format/clang-format.wasm', document.baseURI));
+        return mod;
+      })();
+      formatterCache[kind].catch(() => { delete formatterCache[kind]; });
+    }
+    return formatterCache[kind];
+  }
+
+  const CLANG_STYLE = '{BasedOnStyle: Google, IndentWidth: 4, ContinuationIndentWidth: 4, AccessModifierOffset: -4, ColumnLimit: 100, AllowShortIfStatementsOnASingleLine: false, AllowShortLoopsOnASingleLine: false, AllowShortFunctionsOnASingleLine: Empty}';
+  const CLANG_FILENAMES = { cpp: 'main.cpp', java: 'Main.java', javascript: 'main.js' };
+
+  // Byte offset (UTF-8, as Ruff reports it) -> 1-based line number.
+  function lineAtByte(text, byteOffset) {
+    const bytes = new TextEncoder().encode(text).slice(0, byteOffset);
+    return new TextDecoder().decode(bytes).split('\n').length;
+  }
+
+  // Last resort when a formatter can't load (offline, very old browser):
+  // whitespace-only cleanup that can't change what the code means.
+  function basicCleanup(text) {
+    return text
+      .split('\n')
+      .map(l => expandLeadingTabs(l).replace(/[ \t]+$/, ''))
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\s*$/, '\n');
+  }
+
+  const formatBtn = document.getElementById('formatCodeBtn');
+  let formatting = false;
+  async function formatCode() {
+    if (formatting || editor.getOption('readOnly')) return;
+    const lang = langSelect.value;
+    const source = editor.getValue();
+    if (!source.trim()) return;
+    formatting = true;
+    formatBtn.disabled = true;
+    formatBtn.textContent = 'Formatting…';
+    let result = null;
+    let note = '';
+    try {
+      if (lang === 'python') {
+        const ruff = await loadFormatter('ruff');
+        const input = source.split('\n').map(expandLeadingTabs).join('\n');
+        try {
+          result = ruff.format(input, undefined, { indent_width: INDENT, line_width: 88 });
+        } catch (e) {
+          const msg = String(e && e.message || e);
+          const m = msg.match(/byte range (\d+)\.\./);
+          const where = m ? ` (line ${lineAtByte(input, +m[1])})` : '';
+          note = `Format skipped — Python syntax error${where}: ${msg.replace(/ at byte range.*$/, '')}`;
+        }
+      } else {
+        const clang = await loadFormatter('clang');
+        result = clang.format(source, CLANG_FILENAMES[lang], CLANG_STYLE);
+      }
+    } catch (e) {
+      console.warn('formatter unavailable, falling back to whitespace cleanup', e);
+      result = basicCleanup(source);
+      note = 'Full formatter unavailable — only cleaned up whitespace.';
+    } finally {
+      formatting = false;
+      formatBtn.disabled = false;
+      formatBtn.textContent = 'Format';
+    }
+    // The buffer may have changed (peer typing) while the formatter loaded.
+    if (result !== null && editor.getValue() === source && result !== source) replaceAllCode(result);
+    if (note) setOutput(note);
+  }
+  formatBtn.addEventListener('click', formatCode);
 
   // ---------- Remote cursor + selection indicator ----------
   const remoteRoleLabel = role === 'interviewer' ? 'Candidate' : 'Interviewer';
@@ -583,7 +836,7 @@
   }
   runBtn.addEventListener('click', runOrTest);
   runTestsBtn.addEventListener('click', runTests);
-  document.getElementById('clearOutputBtn').addEventListener('click', () => outputPane.textContent = '');
+  document.getElementById('clearOutputBtn').addEventListener('click', () => { outputPane.textContent = ''; });
 
   if (role !== 'interviewer') {
     runBtn.classList.add('hidden');
@@ -612,12 +865,16 @@
 
   function formatRunResult(result) {
     const parts = [];
-    if (result.status && result.status.id !== 3) parts.push(`Status: ${result.status.description}`);
-    if (result.compile_output) parts.push('Compile error:\n' + result.compile_output.trim());
     if (result.stdout) parts.push(result.stdout.replace(/\n+$/, ''));
-    if (result.stderr) parts.push('stderr:\n' + result.stderr.replace(/\n+$/, ''));
-    if (result.message) parts.push(result.message);
-    return parts.join('\n\n') || '(no output)';
+    if (result.compile_output) parts.push('Compile error:\n' + result.compile_output.trim());
+    if (result.stderr) parts.push(result.stderr.replace(/\n+$/, ''));
+    // Judge0's message ("Exited with error status 1") just restates the
+    // traceback when there is one.
+    if (result.message && !result.stderr && !result.compile_output) parts.push(result.message);
+    const ok = !result.status || result.status.id === 3;
+    const timing = result.time ? ` · ${Math.round(parseFloat(result.time) * 1000)} ms` : '';
+    const header = ok ? `Finished${timing}` : `${result.status.description}${timing}`;
+    return `${header}\n\n${parts.join('\n\n') || '(no output)'}`;
   }
 
   // ---------- Auto-driver for test cases ----------
@@ -630,8 +887,12 @@
   // reliable; C++/Java are left as-is (candidate must read stdin manually).
   function detectPythonEntry(code) {
     if (/class\s+Solution\b/.test(code)) {
-      const m = code.match(/def\s+(\w+)\s*\(\s*self\b/);
-      if (m) return `Solution().${m[1]}`;
+      // First public method — skips __init__ and private helpers.
+      const re = /def\s+(\w+)\s*\(\s*self\b/g;
+      let m;
+      while ((m = re.exec(code))) {
+        if (!m[1].startsWith('_')) return `Solution().${m[1]}`;
+      }
     }
     const m = code.match(/^def\s+(\w+)\s*\(/m);
     return m ? m[1] : null;
@@ -649,6 +910,34 @@
     return null;
   }
 
+  // LeetCode's Python environment pre-imports typing and the common
+  // stdlib modules, so solutions routinely use List[int] / deque / heapq
+  // without importing them. Mirror that, and shift traceback line numbers
+  // back so they still match what the candidate sees in the editor.
+  const PY_PRELUDE = 'from typing import *\nfrom collections import *\nimport collections, heapq, math, bisect, itertools, functools, string, re\n';
+  const PY_PRELUDE_LINES = PY_PRELUDE.split('\n').length - 1;
+  function withPrelude(langKey, code) {
+    return langKey === 'python' && !/^from __future__/m.test(code) ? PY_PRELUDE + code : code;
+  }
+  function fixTracebackLines(langKey, code, text) {
+    if (!text || langKey !== 'python' || /^from __future__/m.test(code)) return text;
+    return text.replace(/(File "[^"]*", line )(\d+)/g, (_, pre, n) => pre + Math.max(1, n - PY_PRELUDE_LINES));
+  }
+
+  // The driver prints this marker before the JSON result, so anything the
+  // candidate print()s while debugging is shown separately instead of
+  // breaking the comparison.
+  const RESULT_MARKER = '__MOCKMATE_RESULT__';
+  function splitDriverOutput(stdout) {
+    const text = stdout || '';
+    const idx = text.lastIndexOf(RESULT_MARKER);
+    if (idx < 0) return { printed: text.replace(/\n+$/, ''), result: null };
+    return {
+      printed: text.slice(0, idx).replace(/\n+$/, ''),
+      result: text.slice(idx + RESULT_MARKER.length).trim(),
+    };
+  }
+
   function withDriver(langKey, code) {
     if (langKey === 'python') {
       const entry = detectPythonEntry(code);
@@ -656,11 +945,13 @@
       return `${code}
 
 if __name__ == "__main__":
-    import json, sys
-    _lines = [l for l in sys.stdin.read().splitlines() if l.strip() != ""]
-    _args = [json.loads(l) for l in _lines]
-    _result = ${entry}(*_args)
-    print(json.dumps(_result, separators=(",", ":")))
+    import json as _mm_json, sys as _mm_sys
+    _mm_args = [_mm_json.loads(l) for l in _mm_sys.stdin.read().splitlines() if l.strip()]
+    _mm_result = ${entry}(*_mm_args)
+    _mm_sys.stdout.flush()
+    print("\\n${RESULT_MARKER}" + _mm_json.dumps(
+        _mm_result, separators=(",", ":"),
+        default=lambda o: sorted(o) if isinstance(o, (set, frozenset)) else list(o) if hasattr(o, "__iter__") else str(o)))
 `;
     }
     if (langKey === 'javascript') {
@@ -671,7 +962,7 @@ if __name__ == "__main__":
 const __mm_lines = require('fs').readFileSync(0, 'utf8').split(/\\r?\\n/).filter(l => l.trim() !== '');
 const __mm_args = __mm_lines.map(l => JSON.parse(l));
 const __mm_result = ${entry}(...__mm_args);
-console.log(JSON.stringify(__mm_result));
+console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? null : __mm_result));
 `;
     }
     return code; // cpp/java: no auto-driver, run as written
@@ -687,16 +978,46 @@ console.log(JSON.stringify(__mm_result));
     return norm(actual) === norm(expected);
   }
 
+  // Run output stays on the interviewer's screen only.
+  const OUTPUT_EMPTY = role === 'interviewer' ? 'Run the code or the tests to see output here.' : 'Format messages show up here.';
+  outputPane.textContent = OUTPUT_EMPTY;
+  if (role === 'interviewer') document.getElementById('outputPrivate').classList.remove('hidden');
+  else {
+    // The candidate never sees run output; this area only carries Format
+    // messages, so it stays out of the way until there is one.
+    document.querySelector('.output-head > span').textContent = 'Messages';
+    document.querySelector('.output-head').classList.add('hidden');
+    outputPane.classList.add('hidden');
+  }
+  function setOutput(text) {
+    outputPane.textContent = text;
+    if (role === 'candidate' && text) {
+      document.querySelector('.output-head').classList.remove('hidden');
+      outputPane.classList.remove('hidden');
+    }
+  }
+
+  function formatRunResultFor(langKey, code, result) {
+    return formatRunResult({
+      ...result,
+      stderr: fixTracebackLines(langKey, code, result.stderr),
+    });
+  }
+
   async function runCode() {
     runBtn.disabled = true;
     runBtn.textContent = 'Running…';
-    outputPane.textContent = 'Running…';
+    setOutput('Running…');
     try {
-      const lang = LANGS[langSelect.value];
-      const result = await executeCode(lang.judge0, editor.getValue(), '');
-      outputPane.textContent = formatRunResult(result);
+      const langKey = langSelect.value;
+      const code = editor.getValue();
+      const result = await executeCode(LANGS[langKey].judge0, withPrelude(langKey, code), '');
+      setOutput(formatRunResultFor(langKey, code, result));
+      const ok = !result.status || result.status.id === 3;
+      addLogEntry('run', ok ? 'Ran the code' : `Ran the code: ${result.status.description}`);
+      replayMark('run');
     } catch (e) {
-      outputPane.textContent = 'Error running code: ' + e.message;
+      setOutput('Error running code: ' + e.message);
     } finally {
       runBtn.disabled = false;
       runBtn.textContent = 'Run';
@@ -705,42 +1026,55 @@ console.log(JSON.stringify(__mm_result));
 
   async function runTests() {
     if (!testCases.length) {
-      outputPane.textContent = 'Add at least one test case first.';
+      setOutput('Add at least one test case first.');
       return;
     }
     runTestsBtn.disabled = true;
-    runTestsBtn.textContent = 'Running tests…';
-    const lang = LANGS[langSelect.value];
+    const langKey = langSelect.value;
+    const lang = LANGS[langKey];
     const rawCode = editor.getValue();
-    const code = withDriver(langSelect.value, rawCode);
-    const noAutoDriver = code === rawCode && langSelect.value !== 'python' && langSelect.value !== 'javascript';
+    const code = withPrelude(langKey, withDriver(langKey, rawCode));
+    const hasDriver = code !== withPrelude(langKey, rawCode);
+    const noAutoDriver = !hasDriver && langKey !== 'python' && langKey !== 'javascript';
     const summaryLines = [];
     let passCount = 0;
+    testCases.forEach(tc => { delete tc.result; });
     for (let i = 0; i < testCases.length; i++) {
       const tc = testCases[i];
+      runTestsBtn.textContent = `Running ${i + 1}/${testCases.length}…`;
+      setOutput(`Running test case ${i + 1} of ${testCases.length}…`);
       try {
         const result = await executeCode(lang.judge0, code, tc.input);
-        const actual = (result.stdout || '').trim();
+        const { printed, result: returned } = hasDriver
+          ? splitDriverOutput(result.stdout)
+          : { printed: '', result: (result.stdout || '').trim() };
+        const actual = returned || '';
         const expected = (tc.expected || '').trim();
-        const pass = outputsMatch(actual, expected);
+        const pass = result.status && result.status.id === 3 && returned !== null && outputsMatch(actual, expected);
         if (pass) passCount++;
-        const errDetail = result.stderr || result.compile_output;
-        let text = pass
-          ? 'Passed'
-          : `Expected: ${expected || '(empty)'}\nGot: ${actual || '(empty)'}` +
-            (errDetail ? `\n${errDetail.trim()}` : '');
-        if (!pass && !actual && noAutoDriver) {
-          text += '\nC++/Java aren\'t auto-run yet — your code needs its own main() that reads stdin and prints the result.';
+        const errDetail = fixTracebackLines(langKey, rawCode, result.stderr) || result.compile_output;
+        const parts = [];
+        if (pass) parts.push('Passed');
+        else {
+          parts.push(`Expected: ${expected || '(empty)'}`);
+          parts.push(`Got: ${actual || (result.status && result.status.id !== 3 ? result.status.description : '(empty)')}`);
         }
-        tc.result = { status: pass ? 'pass' : 'fail', text };
+        if (printed) parts.push(`Printed:\n${printed}`);
+        if (errDetail && !pass) parts.push(errDetail.trim());
+        if (!pass && !actual && noAutoDriver) {
+          parts.push("C++/Java aren't auto-run yet — your code needs its own main() that reads stdin and prints the result.");
+        }
+        tc.result = { status: pass ? 'pass' : 'fail', text: parts.join('\n') };
         summaryLines.push(`Case ${i + 1}: ${pass ? 'PASS' : 'FAIL'}`);
       } catch (e) {
         tc.result = { status: 'fail', text: 'Error: ' + e.message };
         summaryLines.push(`Case ${i + 1}: ERROR — ${e.message}`);
       }
+      renderTestcases();
     }
-    renderTestcases();
-    outputPane.textContent = `${passCount}/${testCases.length} test cases passed\n\n` + summaryLines.join('\n');
+    setOutput(`${passCount}/${testCases.length} test cases passed\n\n` + summaryLines.join('\n'));
+    addLogEntry('run', `Ran tests: ${passCount}/${testCases.length} passed`);
+    replayMark('run');
     runTestsBtn.disabled = false;
     runTestsBtn.textContent = 'Run tests';
   }
@@ -767,22 +1101,44 @@ console.log(JSON.stringify(__mm_result));
     if (!testCases.length) {
       const empty = document.createElement('div');
       empty.className = 'testcase-empty';
-      empty.textContent = role === 'interviewer' ? 'No test cases yet — add one to enable "Run tests".' : 'No test cases yet.';
+      empty.textContent = role === 'interviewer' ? 'No test cases yet. Add one, or choose a question from the bank to get a set.' : 'No example cases for this question.';
       testcaseList.appendChild(empty);
       return;
     }
     testCases.forEach((tc, i) => {
       const row = document.createElement('div');
-      row.className = 'testcase-row';
+      row.className = 'testcase-row' + (tc.hidden ? ' is-hidden' : '') + (tc.result ? ' has-result ' + tc.result.status : '');
 
       const header = document.createElement('div');
       header.className = 'testcase-row-header';
       const label = document.createElement('span');
+      label.className = 'testcase-label';
       label.textContent = `Case ${i + 1}`;
       header.appendChild(label);
+      if (tc.result) {
+        const status = document.createElement('span');
+        status.className = 'testcase-status';
+        status.textContent = tc.result.status === 'pass' ? 'Passed' : 'Failed';
+        header.appendChild(status);
+      }
       if (role === 'interviewer') {
+        const hiddenToggle = document.createElement('label');
+        hiddenToggle.className = 'testcase-hidden-toggle';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!tc.hidden;
+        cb.addEventListener('change', () => {
+          testCases[i].hidden = cb.checked;
+          row.classList.toggle('is-hidden', cb.checked);
+          syncTestcases();
+        });
+        hiddenToggle.append(cb, document.createTextNode('Hidden'));
+        header.appendChild(hiddenToggle);
         const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'testcase-remove';
         removeBtn.textContent = 'Remove';
+        removeBtn.setAttribute('aria-label', `Remove case ${i + 1}`);
         removeBtn.addEventListener('click', () => {
           testCases.splice(i, 1);
           renderTestcases();
@@ -793,7 +1149,9 @@ console.log(JSON.stringify(__mm_result));
       row.appendChild(header);
 
       const inputArea = document.createElement('textarea');
-      inputArea.placeholder = 'one argument per line, e.g.\n[2,7,11,15]\n9';
+      inputArea.placeholder = 'Input — one argument per line\n[2,7,11,15]\n9';
+      inputArea.setAttribute('aria-label', `Case ${i + 1} input`);
+      inputArea.rows = Math.max(2, (tc.input || '').split('\n').length);
       inputArea.value = tc.input || '';
       inputArea.readOnly = role !== 'interviewer';
       inputArea.addEventListener('input', () => {
@@ -803,7 +1161,9 @@ console.log(JSON.stringify(__mm_result));
       row.appendChild(inputArea);
 
       const expectedArea = document.createElement('textarea');
-      expectedArea.placeholder = 'expected return value, e.g. [[1,2]]';
+      expectedArea.placeholder = 'Expected return value, e.g. [0,1]';
+      expectedArea.setAttribute('aria-label', `Case ${i + 1} expected output`);
+      expectedArea.rows = 1;
       expectedArea.value = tc.expected || '';
       expectedArea.readOnly = role !== 'interviewer';
       expectedArea.addEventListener('input', () => {
@@ -812,7 +1172,7 @@ console.log(JSON.stringify(__mm_result));
       });
       row.appendChild(expectedArea);
 
-      if (tc.result) {
+      if (tc.result && tc.result.status !== 'pass') {
         const resultEl = document.createElement('div');
         resultEl.className = 'testcase-result ' + tc.result.status;
         resultEl.textContent = tc.result.text;
@@ -832,11 +1192,16 @@ console.log(JSON.stringify(__mm_result));
     if (role !== 'interviewer') return;
     // Only actually send the content once the question is revealed — before
     // that, send an empty set so nothing leaks to the candidate early.
-    broadcast({
+    // Hidden cases are never sent.
+    broadcast(testcasesMsg());
+    saveRoomStateSoon();
+  }
+  function testcasesMsg() {
+    return {
       type: 'testcases',
-      value: questionVisible ? testCases.map(tc => ({ input: tc.input, expected: tc.expected })) : [],
+      value: questionVisible ? testCases.filter(tc => !tc.hidden).map(tc => ({ input: tc.input, expected: tc.expected })) : [],
       visible: questionVisible,
-    });
+    };
   }
 
   if (role === 'interviewer') {
@@ -847,20 +1212,36 @@ console.log(JSON.stringify(__mm_result));
     });
   }
 
-  // ---------- Timer (counts down from 45 min; hitting 0 auto-fails) ----------
+  // ---------- Timer (counts down from the chosen length; hitting 0 auto-fails) ----------
   const timerEl = document.getElementById('timer');
-  const SESSION_DURATION_SEC = 45 * 60;
+  const durationSelect = document.getElementById('durationSelect');
+  const DURATIONS = [30, 45, 60, 90];
+  let durationMin = DURATIONS.includes(+params.get('duration')) ? +params.get('duration') : 45;
   let startTime = null;
   let timerInterval = null;
   let sessionEnded = false;
 
+  function fmtClock(totalSec) {
+    const m = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  // "mm:ss into the interview", used to stamp log entries and replay
+  // markers. Falls back to wall-clock time before the interview starts.
+  function interviewClock(at) {
+    if (!startTime || at < startTime) {
+      return new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    return fmtClock(Math.floor((at - startTime) / 1000));
+  }
+
   function updateTimerDisplay() {
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const remaining = Math.max(0, SESSION_DURATION_SEC - elapsed);
-    const m = String(Math.floor(remaining / 60)).padStart(2, '0');
-    const s = String(remaining % 60).padStart(2, '0');
-    timerEl.textContent = `${m}:${s}`;
+    const remaining = Math.max(0, durationMin * 60 - elapsed);
+    timerEl.textContent = fmtClock(remaining);
     timerEl.classList.toggle('timer-warning', remaining > 0 && remaining <= 5 * 60);
+    timerEl.classList.add('timer-running');
     if (remaining <= 0) {
       clearInterval(timerInterval);
       // The interviewer is the authority here — they broadcast the fail
@@ -875,25 +1256,48 @@ console.log(JSON.stringify(__mm_result));
     if (timerInterval) clearInterval(timerInterval);
     updateTimerDisplay();
     timerInterval = setInterval(updateTimerDisplay, 1000);
+    if (role === 'interviewer') {
+      startTimerBtn.classList.add('hidden');
+      durationSelect.classList.add('hidden');
+    }
   }
 
   function resetTimerDisplay() {
     startTime = null;
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = null;
-    timerEl.textContent = '45:00';
-    timerEl.classList.remove('timer-warning');
+    timerEl.textContent = fmtClock(durationMin * 60);
+    timerEl.classList.remove('timer-warning', 'timer-running');
+    if (role === 'interviewer') {
+      startTimerBtn.classList.remove('hidden');
+      durationSelect.classList.remove('hidden');
+    }
+  }
+
+  function timerSyncMsg() {
+    return { type: 'timer-sync', startTime, duration: durationMin };
   }
 
   const startTimerBtn = document.getElementById('startTimerBtn');
+  durationSelect.value = String(durationMin);
   if (role === 'interviewer') {
     startTimerBtn.classList.remove('hidden');
+    durationSelect.classList.remove('hidden');
+    durationSelect.addEventListener('change', () => {
+      durationMin = +durationSelect.value;
+      resetTimerDisplay();
+      broadcast(timerSyncMsg());
+      saveRoomStateSoon();
+    });
     startTimerBtn.addEventListener('click', () => {
       startTimer(Date.now());
-      broadcast({ type: 'timer-sync', startTime });
-      startTimerBtn.classList.add('hidden');
+      broadcast(timerSyncMsg());
+      addLogEntry('event', 'Interview started');
+      replayMark('start');
+      saveRoomStateSoon();
     });
   }
+  timerEl.textContent = fmtClock(durationMin * 60);
 
   // ---------- Question pane ----------
   const questionArea = document.getElementById('questionArea');
@@ -904,7 +1308,8 @@ console.log(JSON.stringify(__mm_result));
 
   if (role === 'candidate') {
     questionArea.readOnly = true;
-    questionArea.placeholder = "The interviewer hasn't shared the question yet.";
+    questionArea.placeholder = '';
+    questionArea.classList.add('hidden');
     interviewerQuestionActions.classList.add('hidden');
     candidateHiddenNote.classList.remove('hidden');
   }
@@ -913,15 +1318,24 @@ console.log(JSON.stringify(__mm_result));
   questionArea.addEventListener('input', () => {
     if (suppressQuestionEmit || role !== 'interviewer') return;
     if (questionVisible) broadcast({ type: 'question', value: questionArea.value, visible: true });
+    saveRoomStateSoon();
   });
+
+  function setQuestionVisible(visible) {
+    questionVisible = visible;
+    revealBtn.textContent = visible ? 'Hide from candidate' : 'Show to candidate';
+    revealBtn.classList.toggle('active', visible);
+    if (role === 'interviewer') {
+      broadcast({ type: 'question', value: questionArea.value, visible });
+      syncTestcases();
+    }
+  }
 
   if (role === 'interviewer') {
     revealBtn.addEventListener('click', () => {
-      questionVisible = !questionVisible;
-      revealBtn.textContent = questionVisible ? 'Hide from candidate' : 'Show to candidate';
-      revealBtn.classList.toggle('active', questionVisible);
-      broadcast({ type: 'question', value: questionArea.value, visible: questionVisible });
-      syncTestcases();
+      setQuestionVisible(!questionVisible);
+      addLogEntry('event', questionVisible ? 'Question shown to candidate' : 'Question hidden from candidate');
+      saveRoomStateSoon();
     });
   }
 
@@ -939,7 +1353,8 @@ console.log(JSON.stringify(__mm_result));
       span.textContent = meta.difficulty;
       questionBadges.appendChild(span);
     }
-    questionBadges.classList.toggle('hidden', !meta.difficulty);
+    // The interviewer already sees the difficulty on the selector itself.
+    questionBadges.classList.toggle('hidden', !meta.difficulty || role === 'interviewer');
   }
 
   function setDifficultyButtonsActive(value) {
@@ -965,6 +1380,7 @@ console.log(JSON.stringify(__mm_result));
   const solutionArea = document.getElementById('solutionArea');
   if (role === 'interviewer') {
     solutionPane.classList.remove('hidden');
+    solutionArea.addEventListener('input', () => saveRoomStateSoon());
   }
 
   // ---------- Import from LeetCode ----------
@@ -978,8 +1394,6 @@ console.log(JSON.stringify(__mm_result));
   // blocks, Constraints, and often the starter code), so pulling
   // difficulty/description/test cases/signature out of it is just parsing,
   // not scraping.
-  const DEFAULT_PY_STARTER = '# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n';
-
   function splitTopLevelArgs(s) {
     const out = [];
     let depth = 0, cur = '';
@@ -1093,10 +1507,7 @@ console.log(JSON.stringify(__mm_result));
       }
 
       if (parsed.signature && parsed.signature.lang === 'python' && langSelect.value === 'python' && editor.getValue() === DEFAULT_PY_STARTER) {
-        suppressEmit = true;
-        editor.setValue(parsed.signature.code);
-        suppressEmit = false;
-        broadcast({ type: 'code', value: editor.getValue() });
+        replaceAllCode(parsed.signature.code);
       }
 
       const summary = [];
@@ -1104,13 +1515,66 @@ console.log(JSON.stringify(__mm_result));
       if (parsed.testCases.length) summary.push(`${parsed.testCases.length} test case${parsed.testCases.length === 1 ? '' : 's'}`);
       if (parsed.signature) summary.push('starter code');
       if (summary.length) {
-        outputPane.textContent = `Imported ${sourceLabel}: ${summary.join(', ')}.` + (hadExistingCases && parsed.testCases.length ? ' (test cases already had entries, left them alone.)' : '');
+        setOutput(`Imported ${sourceLabel}: ${summary.join(', ')}.` + (hadExistingCases && parsed.testCases.length ? ' Existing test cases were kept.' : ''));
       }
 
       importPanel.classList.add('hidden');
       document.getElementById('importUrlInput').value = '';
       document.getElementById('importPasteArea').value = '';
+      saveRoomStateSoon();
     }
+
+    // ---------- Question bank ----------
+    const BANK = window.ONSITE_QUESTIONS || [];
+    const bankStarters = new Set(BANK.flatMap(q => Object.values(q.starter || {})));
+
+    function applyBankQuestion(q) {
+      questionArea.value = `${q.title}\n\n${q.prompt}`;
+      if (questionVisible) broadcast({ type: 'question', value: questionArea.value, visible: true });
+
+      currentMeta = { difficulty: q.difficulty };
+      setDifficultyButtonsActive(q.difficulty);
+      renderQuestionBadges(currentMeta);
+      broadcast({ type: 'meta', value: currentMeta });
+
+      testCases = q.tests.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
+      renderTestcases();
+      syncTestcases();
+
+      solutionArea.value = q.solution || '';
+
+      const starter = q.starter && q.starter[langSelect.value];
+      const current = editor.getValue();
+      const untouched = !current.trim() || current === DEFAULT_PY_STARTER || bankStarters.has(current);
+      if (starter && (untouched || confirm(`Replace the code in the editor with the ${q.title} starter?`))) {
+        replaceAllCode(starter);
+      }
+
+      const hiddenCount = q.tests.filter(t => t.hidden).length;
+      setOutput(`Loaded ${q.title}: ${q.tests.length} test cases (${hiddenCount} hidden), starter code, and a reference approach in Log. The question stays hidden until you click Show to candidate.`);
+      addLogEntry('event', `Question set: ${q.title}`);
+      importPanel.classList.add('hidden');
+      saveRoomStateSoon();
+    }
+
+    const bankList = document.getElementById('bankList');
+    BANK.forEach(q => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'bank-item';
+      const title = document.createElement('span');
+      title.className = 'bank-title';
+      title.textContent = q.title;
+      const meta = document.createElement('span');
+      meta.className = 'bank-meta';
+      meta.textContent = q.topics;
+      const diff = document.createElement('span');
+      diff.className = 'bank-diff difficulty-' + q.difficulty;
+      diff.textContent = q.difficulty;
+      b.append(title, meta, diff);
+      b.addEventListener('click', () => applyBankQuestion(q));
+      bankList.appendChild(b);
+    });
 
     document.getElementById('importConfirmBtn').addEventListener('click', () => {
       const url = document.getElementById('importUrlInput').value.trim();
@@ -1154,19 +1618,51 @@ console.log(JSON.stringify(__mm_result));
     });
   }
 
-  // ---------- Candidate activity log (interviewer only): pastes + tab switches ----------
+  // ---------- Interview log (interviewer only) ----------
+  // One timeline for everything worth remembering when writing feedback:
+  // the interviewer's own notes plus candidate pastes, tab switches, and
+  // test runs, each stamped with the interview clock.
   const pasteLog = document.getElementById('pasteLog');
   const pasteLogList = document.getElementById('pasteLogList');
+  const logForm = document.getElementById('logForm');
+  const logInput = document.getElementById('logInput');
+  const LOG_EMPTY_HTML = pasteLogList.innerHTML;
+  let logEntries = []; // { at, kind: note|event|paste|away|run, text }
   if (role === 'interviewer') pasteLog.classList.remove('hidden');
 
-  function logActivityEvent(text, at) {
-    const empty = pasteLogList.querySelector('.paste-log-empty');
-    if (empty) empty.remove();
-    const row = document.createElement('div');
-    const time = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    row.textContent = `${time} — ${text}`;
-    pasteLogList.prepend(row);
-    while (pasteLogList.children.length > 8) pasteLogList.removeChild(pasteLogList.lastChild);
+  function renderLog() {
+    if (!logEntries.length) { pasteLogList.innerHTML = LOG_EMPTY_HTML; return; }
+    pasteLogList.innerHTML = '';
+    for (let i = logEntries.length - 1; i >= 0; i--) {
+      const e = logEntries[i];
+      const row = document.createElement('div');
+      row.className = 'log-row log-' + e.kind;
+      const time = document.createElement('span');
+      time.className = 'log-time';
+      time.textContent = interviewClock(e.at);
+      const text = document.createElement('span');
+      text.className = 'log-text';
+      text.textContent = e.text;
+      row.append(time, text);
+      pasteLogList.appendChild(row);
+    }
+  }
+
+  function addLogEntry(kind, text, at) {
+    if (role !== 'interviewer') return;
+    logEntries.push({ at: at || Date.now(), kind, text });
+    renderLog();
+    saveRoomStateSoon();
+  }
+
+  if (role === 'interviewer') {
+    logForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const text = logInput.value.trim();
+      if (!text) return;
+      addLogEntry('note', text);
+      logInput.value = '';
+    });
   }
 
   // The candidate's tab visibility (switched away / came back) is a useful,
@@ -1178,34 +1674,220 @@ console.log(JSON.stringify(__mm_result));
     });
   }
 
-  // ---------- Feedback pane (interviewer only) ----------
+  // ---------- Code playback (interviewer only) ----------
+  // Every edit (from either side) is recorded as range replacements with a
+  // timestamp, starting from a snapshot of the buffer. Playing them back
+  // shows how the solution was built: false starts, rewrites, big pastes.
+  const REPLAY_MAX_EVENTS = 15000;
+  let replay = { start: { t: Date.now(), value: editor.getValue() }, events: [], marks: [] };
+
+  function resetReplay() {
+    replay = { start: { t: Date.now(), value: editor.getValue() }, events: [], marks: [] };
+  }
+
+  function applyOpsToDoc(doc, ops) {
+    ops.forEach(op => doc.replaceRange(op.text.join('\n'), op.from, op.to));
+  }
+
+  if (role === 'interviewer') {
+    editor.on('changes', (cm, changes) => {
+      replay.events.push({
+        t: Date.now(),
+        ops: changes.map(c => ({ from: { line: c.from.line, ch: c.from.ch }, to: { line: c.to.line, ch: c.to.ch }, text: c.text.slice() })),
+      });
+      // Keep storage bounded: fold the oldest edits into the snapshot.
+      if (replay.events.length > REPLAY_MAX_EVENTS) {
+        const fold = replay.events.splice(0, 2000);
+        const doc = new CodeMirror.Doc(replay.start.value);
+        fold.forEach(ev => applyOpsToDoc(doc, ev.ops));
+        replay.start = { t: fold[fold.length - 1].t, value: doc.getValue() };
+      }
+      saveRoomStateSoon();
+    });
+  }
+
+  function replayMark(kind, at) {
+    if (role !== 'interviewer') return;
+    replay.marks.push({ t: at || Date.now(), kind });
+  }
+
+  const replayOverlay = document.getElementById('replayOverlay');
+  const replaySlider = document.getElementById('replaySlider');
+  const replayPlayBtn = document.getElementById('replayPlay');
+  const replayTimeEl = document.getElementById('replayTime');
+  const replaySpeed = document.getElementById('replaySpeed');
+  const replayMarkersEl = document.getElementById('replayMarkers');
+  let replayViewer = null;
+  let replayState = null; // { timeline, idx, pos, playing, raf, last }
+
+  // Idle stretches are squeezed to at most 2s so playback isn't mostly
+  // waiting; positions are in this compressed "virtual" time.
+  const REPLAY_MAX_GAP = 2000;
+  function buildTimeline() {
+    const points = [];
+    let v = 0;
+    let prev = replay.start.t;
+    replay.events.forEach(ev => {
+      v += Math.min(Math.max(0, ev.t - prev), REPLAY_MAX_GAP);
+      points.push(v);
+      prev = ev.t;
+    });
+    const toVirtual = t => {
+      // Map a real timestamp onto the compressed timeline.
+      let i = replay.events.findIndex(ev => ev.t >= t);
+      if (i < 0) return v;
+      const before = i === 0 ? replay.start.t : replay.events[i - 1].t;
+      const base = i === 0 ? 0 : points[i - 1];
+      return base + Math.min(Math.max(0, t - before), REPLAY_MAX_GAP);
+    };
+    return { points, total: v, toVirtual };
+  }
+
+  function replaySeek(pos) {
+    const st = replayState;
+    pos = Math.max(0, Math.min(pos, st.timeline.total));
+    let target = 0;
+    while (target < st.timeline.points.length && st.timeline.points[target] <= pos) target++;
+    if (target < st.idx) {
+      replayViewer.setValue(replay.start.value);
+      st.idx = 0;
+    }
+    let lastOp = null;
+    replayViewer.operation(() => {
+      for (; st.idx < target; st.idx++) {
+        const ops = replay.events[st.idx].ops;
+        applyOpsToDoc(replayViewer, ops);
+        lastOp = ops[ops.length - 1];
+      }
+    });
+    if (lastOp) {
+      const end = CodeMirror.changeEnd({ from: lastOp.from, to: lastOp.to, text: lastOp.text });
+      replayViewer.setCursor(end);
+      replayViewer.scrollIntoView(end, 80);
+    }
+    st.pos = pos;
+    replaySlider.value = String(Math.round(pos));
+    const realT = st.idx > 0 ? replay.events[st.idx - 1].t : replay.start.t;
+    replayTimeEl.textContent = interviewClock(realT);
+  }
+
+  function replayStop() {
+    if (!replayState) return;
+    replayState.playing = false;
+    cancelAnimationFrame(replayState.raf);
+    replayPlayBtn.textContent = 'Play';
+  }
+
+  function replayTick(now) {
+    const st = replayState;
+    if (!st || !st.playing) return;
+    const dt = (now - st.last) * +replaySpeed.value;
+    st.last = now;
+    replaySeek(st.pos + dt);
+    if (st.pos >= st.timeline.total) { replayStop(); return; }
+    st.raf = requestAnimationFrame(replayTick);
+  }
+
+  function openReplay() {
+    if (!replay.events.length) {
+      setOutput('Nothing to play back yet — playback records every edit from when the room opened.');
+      return;
+    }
+    replayOverlay.classList.remove('hidden');
+    if (!replayViewer) {
+      replayViewer = CodeMirror.fromTextArea(document.getElementById('replayArea'), {
+        theme: 'onsite', lineNumbers: true, readOnly: true, tabSize: INDENT, indentUnit: INDENT,
+      });
+    }
+    replayViewer.setOption('mode', LANGS[langSelect.value].cmMode);
+    replayViewer.setValue(replay.start.value);
+    const timeline = buildTimeline();
+    replayState = { timeline, idx: 0, pos: 0, playing: false, raf: 0, last: 0 };
+    replaySlider.max = String(Math.max(1, Math.round(timeline.total)));
+    replayMarkersEl.innerHTML = '';
+    // Pastes and tab switches are the markers that matter most, so draw
+    // them last (on top), and stack markers that would overlap.
+    const priority = { start: 0, run: 1, away: 2, paste: 3 };
+    const placed = [];
+    replay.marks.slice().sort((a, b) => (priority[a.kind] || 0) - (priority[b.kind] || 0)).forEach(m => {
+      const pct = (timeline.toVirtual(m.t) / Math.max(1, timeline.total)) * 100;
+      let row = 0;
+      while (placed.some(p => p.row === row && Math.abs(p.pct - pct) < 1.2)) row++;
+      placed.push({ row, pct });
+      const dot = document.createElement('span');
+      dot.className = 'mk mk-' + m.kind;
+      dot.style.left = `${pct}%`;
+      dot.style.top = `${-row * 10}px`;
+      dot.title = `${{ paste: 'Paste', away: 'Left the tab', run: 'Code run', start: 'Interview started' }[m.kind] || m.kind} at ${interviewClock(m.t)}`;
+      replayMarkersEl.appendChild(dot);
+    });
+    replaySeek(0);
+    setTimeout(() => replayViewer.refresh(), 0);
+    replayPlayBtn.focus();
+  }
+
+  function closeReplay() {
+    replayStop();
+    replayOverlay.classList.add('hidden');
+  }
+
+  if (role === 'interviewer') {
+    document.getElementById('replayBtn').addEventListener('click', openReplay);
+    document.getElementById('replayClose').addEventListener('click', closeReplay);
+    replayOverlay.addEventListener('click', e => { if (e.target === replayOverlay) closeReplay(); });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && !replayOverlay.classList.contains('hidden')) closeReplay();
+    });
+    replayPlayBtn.addEventListener('click', () => {
+      const st = replayState;
+      if (!st) return;
+      if (st.playing) { replayStop(); return; }
+      if (st.pos >= st.timeline.total) replaySeek(0);
+      st.playing = true;
+      st.last = performance.now();
+      replayPlayBtn.textContent = 'Pause';
+      st.raf = requestAnimationFrame(replayTick);
+    });
+    replaySlider.addEventListener('input', () => {
+      replayStop();
+      replaySeek(+replaySlider.value);
+    });
+  }
+
+  // ---------- Scorecard (interviewer only) ----------
   const feedbackPane = document.getElementById('feedbackPane');
   const feedbackScoresEl = document.getElementById('feedbackScores');
   const feedbackSummary = document.getElementById('feedbackSummary');
   const verdictBadge = document.getElementById('verdictBadge');
   const FEEDBACK_CATEGORIES = ['Problem solving', 'Coding', 'Communication'];
+  const SCORE_LABELS = { 1: 'Weak', 2: 'Mixed', 3: 'Solid', 4: 'Strong' };
   const feedbackScores = {};
   let currentVerdict = null;
   let candidateDisplayName = '';
 
   function buildSessionSummary() {
-    const lines = [`MockMate session — room ${room}`, `Date: ${new Date().toLocaleString()}`];
+    const lines = [`Onsite interview — room ${room}`, `Date: ${new Date().toLocaleString()}`];
     if (candidateDisplayName) lines.push(`Candidate: ${candidateDisplayName}`);
     if (startTime) {
       const mins = Math.round((Date.now() - startTime) / 60000);
-      lines.push(`Duration: ${mins} min`);
+      lines.push(`Duration: ${mins} of ${durationMin} min`);
     }
     if (currentMeta.difficulty) {
-      lines.push(`Question: ${currentMeta.difficulty}`);
+      lines.push(`Difficulty: ${currentMeta.difficulty}`);
     }
     lines.push('');
     FEEDBACK_CATEGORIES.forEach(cat => {
-      lines.push(`${cat}: ${feedbackScores[cat] ? feedbackScores[cat] + '/4' : 'not rated'}`);
+      lines.push(`${cat}: ${feedbackScores[cat] ? `${feedbackScores[cat]}/4 (${SCORE_LABELS[feedbackScores[cat]]})` : 'not rated'}`);
     });
     lines.push('');
     lines.push(`Overall: ${currentVerdict === 'pass' ? 'Pass' : currentVerdict === 'fail' ? 'No pass' : 'Not set'}`);
     const summary = feedbackSummary.value.trim();
     if (summary) { lines.push(''); lines.push('Summary:'); lines.push(summary); }
+    if (logEntries.length) {
+      lines.push('');
+      lines.push('Interview log:');
+      logEntries.forEach(e => lines.push(`  ${interviewClock(e.at)}  ${e.text}`));
+    }
     if (questionArea.value.trim()) {
       lines.push('');
       lines.push('Question:');
@@ -1225,6 +1907,7 @@ console.log(JSON.stringify(__mm_result));
         scores: { ...feedbackScores },
         verdict: currentVerdict,
         summary: summary || null,
+        notes: logEntries.filter(e => e.kind === 'note').map(e => `${interviewClock(e.at)} ${e.text}`),
         questionSnippet: questionArea.value.trim().slice(0, 140),
       },
     };
@@ -1233,19 +1916,28 @@ console.log(JSON.stringify(__mm_result));
   function saveSessionToHistory() {
     if (role !== 'interviewer') return;
     const { record } = buildSessionSummary();
-    const hasContent = record.verdict || record.summary || Object.keys(record.scores).length > 0;
+    const hasContent = record.verdict || record.summary || record.notes.length || Object.keys(record.scores).length > 0;
     if (!hasContent) return; // nothing happened yet — don't clutter history
     try {
-      const existing = JSON.parse(localStorage.getItem('mockmate-history') || '[]');
+      const existing = JSON.parse(localStorage.getItem('onsite-history') || localStorage.getItem('mockmate-history') || '[]');
       existing.unshift(record);
-      localStorage.setItem('mockmate-history', JSON.stringify(existing.slice(0, 50)));
+      localStorage.setItem('onsite-history', JSON.stringify(existing.slice(0, 50)));
     } catch {}
   }
 
-  document.getElementById('leaveLink').addEventListener('click', e => {
+  document.getElementById('leaveLink').addEventListener('click', () => {
     if (role !== 'interviewer') return;
     saveSessionToHistory();
+    clearRoomState();
   });
+
+  function renderScores() {
+    feedbackScoresEl.querySelectorAll('.feedback-category').forEach(row => {
+      const cat = row.dataset.cat;
+      row.querySelectorAll('button').forEach(b => b.classList.toggle('active', +b.dataset.score === feedbackScores[cat]));
+      row.querySelector('.feedback-score-word').textContent = feedbackScores[cat] ? SCORE_LABELS[feedbackScores[cat]] : '';
+    });
+  }
 
   if (role !== 'interviewer') {
     feedbackPane.classList.add('hidden');
@@ -1254,46 +1946,45 @@ console.log(JSON.stringify(__mm_result));
     FEEDBACK_CATEGORIES.forEach(cat => {
       const row = document.createElement('div');
       row.className = 'feedback-category';
+      row.dataset.cat = cat;
       const label = document.createElement('span');
       label.className = 'feedback-category-label';
       label.textContent = cat;
-      row.appendChild(label);
+      const word = document.createElement('span');
+      word.className = 'feedback-score-word';
       const scale = document.createElement('div');
       scale.className = 'feedback-scale';
+      scale.setAttribute('role', 'group');
+      scale.setAttribute('aria-label', cat);
       [1, 2, 3, 4].forEach(n => {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = String(n);
+        b.dataset.score = String(n);
+        b.title = SCORE_LABELS[n];
         b.addEventListener('click', () => {
-          feedbackScores[cat] = n;
-          scale.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-          b.classList.add('active');
+          feedbackScores[cat] = feedbackScores[cat] === n ? undefined : n;
+          if (!feedbackScores[cat]) delete feedbackScores[cat];
+          renderScores();
+          saveRoomStateSoon();
         });
         scale.appendChild(b);
       });
-      row.appendChild(scale);
+      row.append(label, word, scale);
       feedbackScoresEl.appendChild(row);
     });
+    feedbackSummary.addEventListener('input', saveRoomStateSoon);
 
     document.getElementById('passBtn').addEventListener('click', () => setVerdict('pass'));
     document.getElementById('failBtn').addEventListener('click', () => setVerdict('fail'));
     document.getElementById('clearVerdictBtn').addEventListener('click', () => setVerdict(null));
 
-    document.getElementById('copyFeedbackBtn').addEventListener('click', async e => {
-      const { text } = buildSessionSummary();
-      const btn = e.currentTarget;
-      const original = btn.textContent;
-      try {
-        await navigator.clipboard.writeText(text);
-        btn.textContent = 'Copied';
-      } catch {
-        window.prompt('Copy this summary:', text);
-      }
-      setTimeout(() => { btn.textContent = original; }, 1800);
+    document.getElementById('copyFeedbackBtn').addEventListener('click', e => {
+      copyText(buildSessionSummary().text, e.currentTarget);
     });
 
     function resetRoomForNextCandidate() {
-      if (!confirm('Reset the room for the next candidate? This clears the code, question, test cases, and feedback, and disconnects the current candidate.')) return;
+      if (!confirm('Reset the room for the next candidate? This saves the scorecard to Past interviews, clears everything else, and disconnects the current candidate.')) return;
       saveSessionToHistory();
       if (dataConn) {
         dataConn.send({ type: 'kicked' });
@@ -1303,16 +1994,15 @@ console.log(JSON.stringify(__mm_result));
       updateEndAccessVisibility();
 
       suppressEmit = true;
-      editor.setValue('# Write code here — it syncs live with your peer\ndef two_sum(nums, target):\n    pass\n');
+      editor.setValue(DEFAULT_PY_STARTER);
+      editor.clearHistory();
       suppressEmit = false;
       langSelect.value = 'python';
       editor.setOption('mode', LANGS.python.cmMode);
-      outputPane.textContent = 'Output shows up here once you run your code.';
+      outputPane.textContent = OUTPUT_EMPTY;
 
       questionArea.value = '';
-      questionVisible = false;
-      revealBtn.textContent = 'Show to candidate';
-      revealBtn.classList.remove('active');
+      setQuestionVisible(false);
       currentMeta = { difficulty: '' };
       setDifficultyButtonsActive('');
       renderQuestionBadges(currentMeta);
@@ -1321,7 +2011,8 @@ console.log(JSON.stringify(__mm_result));
       renderTestcases();
 
       solutionArea.value = '';
-      pasteLogList.innerHTML = '<div class="paste-log-empty">No activity yet.</div>';
+      logEntries = [];
+      renderLog();
 
       wbObjects = [];
       wbSelectedId = null;
@@ -1330,14 +2021,17 @@ console.log(JSON.stringify(__mm_result));
       setMode('code');
 
       FEEDBACK_CATEGORIES.forEach(cat => delete feedbackScores[cat]);
-      feedbackScoresEl.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      renderScores();
       feedbackSummary.value = '';
       setVerdict(null); // also un-ends the session if it had ended (timeout/fail)
+      candidateDisplayName = '';
+      admittedName = '';
 
       resetTimerDisplay();
-      startTimerBtn.classList.remove('hidden');
-      broadcast({ type: 'timer-sync', startTime: null });
-      setConnStatus('waiting for peer', 'waiting');
+      broadcast(timerSyncMsg());
+      resetReplay();
+      clearRoomState();
+      setConnStatus('Waiting for your candidate', 'waiting');
     }
 
     document.getElementById('resetRoomBtn').addEventListener('click', resetRoomForNextCandidate);
@@ -1349,11 +2043,15 @@ console.log(JSON.stringify(__mm_result));
     sessionEnded = true;
     if (timerInterval) clearInterval(timerInterval);
     editor.setOption('readOnly', true);
-    mainLayoutEl.classList.add('hidden');
+    document.querySelector('.main-layout').classList.add('hidden');
     document.getElementById('sessionEndOverlay').classList.remove('hidden');
-    document.getElementById('sessionEndReason').textContent =
-      reason === 'timeout'
-        ? "Time's up — the 45-minute session ended automatically."
+    const timeout = reason === 'timeout';
+    document.getElementById('sessionEndTitle').textContent =
+      role === 'interviewer' ? (timeout ? "Time's up" : 'Interview ended') : (timeout ? "Time's up" : 'You failed');
+    document.getElementById('sessionEndReason').textContent = timeout
+      ? `The ${durationMin}-minute interview ended automatically.`
+      : role === 'interviewer'
+        ? 'You marked this interview as no pass. Your scorecard and log are saved.'
         : 'The interviewer marked this as a fail.';
     if (role === 'interviewer') document.getElementById('sessionEndResetBtn').classList.remove('hidden');
   }
@@ -1363,7 +2061,7 @@ console.log(JSON.stringify(__mm_result));
     sessionEnded = false;
     document.getElementById('sessionEndOverlay').classList.add('hidden');
     const candidateStillWaiting = role === 'candidate' && !admitted;
-    if (!candidateStillWaiting) mainLayoutEl.classList.remove('hidden');
+    if (!candidateStillWaiting) document.querySelector('.main-layout').classList.remove('hidden');
     if (role === 'interviewer') editor.setOption('readOnly', false);
   }
 
@@ -1380,25 +2078,132 @@ console.log(JSON.stringify(__mm_result));
       verdictBadge.className = 'verdict-badge hidden';
       unendSession();
     }
-    if (!fromPeer) broadcast({ type: 'verdict', value, reason });
+    if (!fromPeer) {
+      broadcast({ type: 'verdict', value, reason });
+      saveRoomStateSoon();
+    }
   }
 
-  // ---------- In-room invite link (interviewer only) ----------
+  // ---------- Room state that survives a refresh (interviewer only) ----------
+  // Saved to this browser only, keyed by room code, so an accidental
+  // refresh or closed tab mid-interview doesn't wipe the code, question,
+  // tests, log, scorecard, or playback. Cleared on Leave or reset.
+  const ROOM_STATE_KEY = `onsite-room-${room}`;
+  const ROOM_STATE_TTL = 3 * 24 * 3600 * 1000;
+  let roomStateTimer = null;
+  let roomStateReady = false; // don't save over saved state before restoring it
+
+  function saveRoomStateSoon() {
+    if (role !== 'interviewer' || !roomStateReady) return;
+    if (roomStateTimer) clearTimeout(roomStateTimer);
+    roomStateTimer = setTimeout(saveRoomState, 800);
+  }
+
+  function saveRoomState() {
+    if (role !== 'interviewer' || !roomStateReady) return;
+    if (roomStateTimer) { clearTimeout(roomStateTimer); roomStateTimer = null; }
+    const state = {
+      v: 1,
+      savedAt: Date.now(),
+      code: editor.getValue(),
+      lang: langSelect.value,
+      question: questionArea.value,
+      questionVisible,
+      meta: currentMeta,
+      testCases: testCases.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden })),
+      solution: solutionArea.value,
+      log: logEntries,
+      scores: feedbackScores,
+      summary: feedbackSummary.value,
+      verdict: currentVerdict,
+      startTime,
+      durationMin,
+      candidateName: candidateDisplayName,
+      admittedName,
+      wb: wbObjects,
+      replay,
+    };
+    try {
+      localStorage.setItem(ROOM_STATE_KEY, JSON.stringify(state));
+    } catch {
+      // Over quota — playback is by far the largest part; drop it first.
+      try { localStorage.setItem(ROOM_STATE_KEY, JSON.stringify({ ...state, replay: null })); } catch {}
+    }
+  }
+
+  function clearRoomState() {
+    if (roomStateTimer) { clearTimeout(roomStateTimer); roomStateTimer = null; }
+    try { localStorage.removeItem(ROOM_STATE_KEY); } catch {}
+  }
+
+  function restoreRoomState() {
+    if (role !== 'interviewer') return;
+    let state = null;
+    try {
+      // Prune other rooms' state that's gone stale.
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('onsite-room-') || k === ROOM_STATE_KEY) continue;
+        const other = JSON.parse(localStorage.getItem(k) || 'null');
+        if (!other || Date.now() - other.savedAt > ROOM_STATE_TTL) localStorage.removeItem(k);
+      }
+      state = JSON.parse(localStorage.getItem(ROOM_STATE_KEY) || 'null');
+    } catch {}
+    if (!state || state.v !== 1 || Date.now() - state.savedAt > ROOM_STATE_TTL) return;
+
+    suppressEmit = true;
+    langSelect.value = LANGS[state.lang] ? state.lang : 'python';
+    editor.setOption('mode', LANGS[langSelect.value].cmMode);
+    editor.setValue(state.code || '');
+    editor.clearHistory();
+    suppressEmit = false;
+    questionArea.value = state.question || '';
+    setQuestionVisible(!!state.questionVisible);
+    currentMeta = state.meta || { difficulty: '' };
+    setDifficultyButtonsActive(currentMeta.difficulty);
+    renderQuestionBadges(currentMeta);
+    testCases = (state.testCases || []).map(tc => ({ ...tc }));
+    renderTestcases();
+    solutionArea.value = state.solution || '';
+    logEntries = state.log || [];
+    Object.assign(feedbackScores, state.scores || {});
+    renderScores();
+    feedbackSummary.value = state.summary || '';
+    candidateDisplayName = state.candidateName || '';
+    admittedName = state.admittedName || '';
+    wbObjects = state.wb || [];
+    if (state.replay && state.replay.start) replay = state.replay;
+    else resetReplay();
+    if (DURATIONS.includes(state.durationMin)) {
+      durationMin = state.durationMin;
+      durationSelect.value = String(durationMin);
+    }
+    if (state.startTime) startTimer(state.startTime);
+    else resetTimerDisplay();
+    renderLog();
+    if (state.verdict) setVerdict(state.verdict, true);
+    setOutput('Restored this room from your last visit.');
+  }
+  window.addEventListener('pagehide', saveRoomState);
+
+  // ---------- Invite link (interviewer only) ----------
   const copyRoomLinkBtn = document.getElementById('copyRoomLink');
+  const inviteCard = document.getElementById('inviteCard');
   if (role === 'interviewer') {
     copyRoomLinkBtn.classList.remove('hidden');
-    copyRoomLinkBtn.addEventListener('click', async () => {
-      const base = window.location.href.replace(/interview\.html.*$/, '').replace(/\/$/, '');
-      const link = `${base}/interview.html?room=${encodeURIComponent(room)}&role=candidate`;
-      const original = copyRoomLinkBtn.textContent;
-      try {
-        await navigator.clipboard.writeText(link);
-        copyRoomLinkBtn.textContent = 'Copied';
-      } catch {
-        window.prompt('Copy this link:', link);
-      }
-      setTimeout(() => { copyRoomLinkBtn.textContent = original; }, 1800);
-    });
+    copyRoomLinkBtn.addEventListener('click', () => copyText(inviteLink, copyRoomLinkBtn, 'Link copied'));
+    document.getElementById('roomCodePill').addEventListener('click', () => copyText(inviteLink, document.getElementById('roomChip'), 'Copied'));
+    document.getElementById('inviteLinkText').textContent = inviteLink.replace(/^https?:\/\//, '');
+    const inviteCopyBtn = document.getElementById('inviteCopyBtn');
+    inviteCopyBtn.addEventListener('click', () => copyText(inviteLink, inviteCopyBtn));
+  } else {
+    document.getElementById('roomCodePill').disabled = true;
+  }
+  // The invite card is the interviewer's empty state: shown until a
+  // candidate is in the room.
+  function updateInviteCard() {
+    if (role !== 'interviewer') return;
+    inviteCard.classList.toggle('hidden', !!(dataConn && dataConn.open) || !!pendingConn);
   }
 
   // ---------- Resizable side panel ----------
@@ -1412,7 +2217,7 @@ console.log(JSON.stringify(__mm_result));
 
   if (window.innerWidth > 820) {
     try {
-      const saved = localStorage.getItem('mockmate-sidebar-width');
+      const saved = localStorage.getItem('onsite-sidebar-width');
       if (saved) applySidebarWidth(parseInt(saved, 10));
     } catch {}
   }
@@ -1436,7 +2241,7 @@ console.log(JSON.stringify(__mm_result));
     resizeHandle.classList.remove('dragging');
     document.body.style.userSelect = '';
     try {
-      localStorage.setItem('mockmate-sidebar-width', String(Math.round(sidePane.getBoundingClientRect().width)));
+      localStorage.setItem('onsite-sidebar-width', String(Math.round(sidePane.getBoundingClientRect().width)));
     } catch {}
   });
 
@@ -1450,6 +2255,8 @@ console.log(JSON.stringify(__mm_result));
     connText.textContent = text;
     connDot.classList.toggle('connected', state === 'connected');
     connDot.classList.toggle('waiting', state === 'waiting');
+    connDot.classList.toggle('error', state === 'error');
+    updateInviteCard();
     // The candidate sees a blank waiting screen instead of the editor until
     // actually admitted — nothing to read or interact with while waiting.
     if (role === 'candidate') {
@@ -1475,7 +2282,7 @@ console.log(JSON.stringify(__mm_result));
     { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ];
 
-  const peerId = role === 'interviewer' ? `mockmate-${room}` : `mockmate-${room}-${Math.random().toString(36).slice(2, 8)}`;
+  const peerId = role === 'interviewer' ? `onsite-${room}` : `onsite-${room}-${Math.random().toString(36).slice(2, 8)}`;
   const peer = new Peer(peerId, { config: { iceServers } });
 
   // dataConn is only set once the interviewer has actually admitted the
@@ -1484,24 +2291,31 @@ console.log(JSON.stringify(__mm_result));
   let dataConn = null;
   let admitted = role === 'interviewer'; // the interviewer doesn't need admitting
   let pendingConn = null; // interviewer: a connection waiting on a decision
+  let admittedName = ''; // interviewer: who's been let in (auto-readmitted on reconnect)
   let deniedPermanently = false; // candidate: interviewer explicitly said no — stop auto-retrying
 
   function broadcast(msg) {
-    if (dataConn && dataConn.open && admitted) dataConn.send(msg);
+    if (!(dataConn && dataConn.open && admitted)) return;
+    try {
+      dataConn.send(msg);
+    } catch (e) {
+      console.error('failed to send', msg.type, e);
+    }
   }
+
+  // Restore after everything above exists (it calls broadcast(), which
+  // is a no-op until a candidate is admitted).
+  restoreRoomState();
+  roomStateReady = true;
 
   const admitBanner = document.getElementById('admitBanner');
   const admitBannerText = document.getElementById('admitBannerText');
 
   function sendFullState(conn) {
-    conn.send({ type: 'timer-sync', startTime });
+    conn.send(timerSyncMsg());
     conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
     conn.send({ type: 'meta', value: currentMeta });
-    conn.send({
-      type: 'testcases',
-      value: questionVisible ? testCases.map(tc => ({ input: tc.input, expected: tc.expected })) : [],
-      visible: questionVisible,
-    });
+    conn.send(testcasesMsg());
     conn.send({ type: 'code', value: editor.getValue() });
     conn.send({ type: 'lang', value: langSelect.value });
     conn.send({ type: 'verdict', value: currentVerdict });
@@ -1525,8 +2339,11 @@ console.log(JSON.stringify(__mm_result));
       conn.send({ type: 'admitted' });
       conn.send({ type: 'hello', name: myName, role });
       sendFullState(conn);
-      setConnStatus('connected', 'connected');
+      setConnStatus(`${candidateDisplayName || 'Candidate'} is here`, 'connected');
       updateEndAccessVisibility();
+      addLogEntry('event', admittedName === candidateDisplayName ? `${candidateDisplayName} reconnected` : `${candidateDisplayName || 'Candidate'} joined`);
+      admittedName = candidateDisplayName;
+      saveRoomStateSoon();
     });
     document.getElementById('denyBtn').addEventListener('click', () => {
       if (!pendingConn) return;
@@ -1534,14 +2351,16 @@ console.log(JSON.stringify(__mm_result));
       pendingConn.close();
       pendingConn = null;
       admitBanner.classList.add('hidden');
-      setConnStatus('waiting for peer', 'waiting');
+      setConnStatus('Waiting for your candidate', 'waiting');
     });
     endAccessBtn.addEventListener('click', () => {
       if (!dataConn) return;
       dataConn.send({ type: 'kicked' });
       dataConn.close();
       dataConn = null;
-      setConnStatus('waiting for peer', 'waiting');
+      admittedName = '';
+      addLogEntry('event', `Removed ${candidateDisplayName || 'the candidate'} from the room`);
+      setConnStatus('Waiting for your candidate', 'waiting');
       updateEndAccessVisibility();
     });
   }
@@ -1551,11 +2370,11 @@ console.log(JSON.stringify(__mm_result));
     if (!pc) return;
     pc.addEventListener('iceconnectionstatechange', () => {
       if (pc.iceConnectionState === 'failed') {
-        setConnStatus('connection failed — likely blocked by a firewall/VPN on one side', 'error');
+        setConnStatus('Connection failed — a firewall or VPN on one side is likely blocking it', 'error');
       } else if (pc.iceConnectionState === 'disconnected') {
-        setConnStatus('connection dropped, trying to recover…', 'waiting');
-      } else if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && conn.open) {
-        setConnStatus('connected', 'connected');
+        setConnStatus('Connection dropped. Reconnecting…', 'waiting');
+      } else if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && conn.open && admitted) {
+        setConnStatus(connectedLabel(), 'connected');
       }
     });
   }
@@ -1569,7 +2388,7 @@ console.log(JSON.stringify(__mm_result));
         dataConn = conn;
         admitted = false;
         editor.setOption('readOnly', true);
-        setConnStatus('waiting for the interviewer to let you in…', 'waiting');
+        setConnStatus('Waiting for the interviewer to let you in…', 'waiting');
         conn.send({ type: 'join-request', name: myName });
       } else {
         // Interviewer: a new connection is just a knock — hold it until
@@ -1585,7 +2404,7 @@ console.log(JSON.stringify(__mm_result));
     conn.on('data', msg => handleData(msg, conn));
     conn.on('close', () => {
       if (conn === dataConn) {
-        setConnStatus('peer disconnected', 'idle');
+        setConnStatus(role === 'interviewer' ? 'Candidate left' : 'Interviewer disconnected. Reconnecting…', 'idle');
         clearRemoteCursor();
         dataConn = null;
         admitted = role === 'interviewer';
@@ -1601,7 +2420,7 @@ console.log(JSON.stringify(__mm_result));
     });
     conn.on('error', err => {
       console.error('data connection error', err);
-      setConnStatus('connection error — try refreshing both windows', 'error');
+      setConnStatus('Connection error. Refresh both windows to reconnect.', 'error');
     });
   }
 
@@ -1610,23 +2429,30 @@ console.log(JSON.stringify(__mm_result));
       case 'join-request':
         if (role !== 'interviewer') break;
         remoteName = `${msg.name} (candidate)`;
+        // Someone you already let in, reconnecting after a refresh or a
+        // dropped connection on either side, comes straight back in.
+        if (admittedName && msg.name === admittedName) {
+          candidateDisplayName = msg.name;
+          document.getElementById('admitBtn').click();
+          break;
+        }
         candidateDisplayName = msg.name;
         admitBannerText.textContent = `${msg.name} wants to join the room.`;
         admitBanner.classList.remove('hidden');
-        setConnStatus(`${msg.name} is waiting to be let in`, 'waiting');
+        setConnStatus(`${msg.name} is waiting to join`, 'waiting');
         break;
       case 'admitted':
         admitted = true;
         editor.setOption('readOnly', false);
-        setConnStatus('connected', 'connected');
+        setConnStatus(connectedLabel(), 'connected');
         break;
       case 'denied':
         editor.setOption('readOnly', true);
         deniedPermanently = msg.reason !== 'occupied';
         setConnStatus(
           msg.reason === 'occupied'
-            ? 'this room already has a candidate connected'
-            : "the interviewer didn't let you in — check with them and refresh to try again",
+            ? 'This room already has a candidate in it.'
+            : "The interviewer didn't let you in. Check with them, then refresh to ask again.",
           'error'
         );
         break;
@@ -1635,7 +2461,7 @@ console.log(JSON.stringify(__mm_result));
         editor.setOption('readOnly', true);
         deniedPermanently = true;
         admitted = false;
-        setConnStatus('the interviewer ended your access — refresh to ask again', 'error');
+        setConnStatus('The interviewer removed you from the room. Refresh to ask to join again.', 'error');
         break;
       case 'hello':
         remoteName = `${msg.name} (${msg.role})`;
@@ -1644,11 +2470,10 @@ console.log(JSON.stringify(__mm_result));
         showRemoteCursor(msg.line, msg.ch, msg.sel);
         break;
       case 'code':
-        suppressEmit = true;
-        const cursor = editor.getCursor();
-        editor.setValue(msg.value);
-        editor.setCursor(cursor);
-        suppressEmit = false;
+        applyRemoteCode(null, msg.value);
+        break;
+      case 'code-ops':
+        applyRemoteCode(msg.ops, msg.value);
         break;
       case 'lang':
         langSelect.value = msg.value;
@@ -1656,6 +2481,8 @@ console.log(JSON.stringify(__mm_result));
         break;
       case 'timer-sync':
         if (role === 'candidate') {
+          timerEl.classList.remove('hidden');
+          if (msg.duration) durationMin = msg.duration;
           if (msg.startTime) startTimer(msg.startTime);
           else resetTimerDisplay();
         }
@@ -1669,6 +2496,7 @@ console.log(JSON.stringify(__mm_result));
           questionArea.value = '';
           candidateHiddenNote.classList.remove('hidden');
         }
+        if (role === 'candidate') questionArea.classList.toggle('hidden', !msg.visible);
         suppressQuestionEmit = false;
         break;
       case 'testcases':
@@ -1681,11 +2509,15 @@ console.log(JSON.stringify(__mm_result));
         renderQuestionBadges(currentMeta);
         break;
       case 'paste-flag':
-        if (role === 'interviewer') logActivityEvent(`candidate pasted ${msg.chars} characters`, msg.at);
+        if (role === 'interviewer') {
+          addLogEntry('paste', `Pasted ${msg.chars} characters`, msg.at);
+          replayMark('paste', msg.at);
+        }
         break;
       case 'visibility':
         if (role === 'interviewer') {
-          logActivityEvent(msg.hidden ? 'candidate switched away from the tab' : 'candidate came back to the tab', msg.at);
+          addLogEntry(msg.hidden ? 'away' : 'event', msg.hidden ? 'Left the interview tab' : 'Came back to the tab', msg.at);
+          if (msg.hidden) replayMark('away', msg.at);
         }
         break;
       case 'verdict':
@@ -1726,10 +2558,14 @@ console.log(JSON.stringify(__mm_result));
     }
   }
 
+  function connectedLabel() {
+    return role === 'interviewer' ? `${candidateDisplayName || 'Candidate'} is here` : 'Connected to your interviewer';
+  }
+
   let connectAttempts = 0;
   function connectToHost() {
-    const hostId = `mockmate-${room}`;
-    setConnStatus(connectAttempts === 0 ? 'connecting…' : 'waiting for the interviewer to join…', 'waiting');
+    const hostId = `onsite-${room}`;
+    setConnStatus(connectAttempts === 0 ? 'Connecting…' : 'Waiting for the interviewer to open the room…', 'waiting');
     const conn = peer.connect(hostId, { reliable: true });
     // Wire listeners immediately, synchronously — PeerJS's 'open' event is a
     // one-time EventEmitter emission (confirmed in vendor/peerjs source:
@@ -1741,11 +2577,37 @@ console.log(JSON.stringify(__mm_result));
     wireDataConn(conn);
   }
 
+  // Candidates who arrive via an invite link name themselves before knocking.
+  const nameForm = document.getElementById('nameForm');
+  const nameFormInput = document.getElementById('nameFormInput');
+  document.getElementById('waitingRoom').textContent = room;
+  let peerOpen = false;
+  function candidateReady() {
+    if (peerOpen && myName) connectToHost();
+  }
+  if (role === 'candidate' && !myName) {
+    try { nameFormInput.value = localStorage.getItem('onsite-name') || ''; } catch {}
+    nameForm.classList.remove('hidden');
+    waitingText.classList.add('hidden');
+    setTimeout(() => nameFormInput.focus(), 0);
+    nameForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const name = nameFormInput.value.trim();
+      if (!name) return;
+      myName = name;
+      try { localStorage.setItem('onsite-name', name); } catch {}
+      nameForm.classList.add('hidden');
+      waitingText.classList.remove('hidden');
+      candidateReady();
+    });
+  }
+
   peer.on('open', () => {
+    peerOpen = true;
     if (role === 'candidate') {
-      connectToHost();
+      candidateReady();
     } else {
-      setConnStatus('waiting for peer', 'waiting');
+      setConnStatus('Waiting for your candidate', 'waiting');
     }
   });
 
@@ -1754,7 +2616,7 @@ console.log(JSON.stringify(__mm_result));
   });
 
   peer.on('disconnected', () => {
-    setConnStatus('lost connection to server, reconnecting…', 'waiting');
+    setConnStatus('Lost the connection to the server. Reconnecting…', 'waiting');
     peer.reconnect();
   });
 
@@ -1767,11 +2629,11 @@ console.log(JSON.stringify(__mm_result));
       connectAttempts++;
       const delay = Math.min(2000 + connectAttempts * 500, 5000);
       setTimeout(connectToHost, delay);
-      setConnStatus('waiting for the interviewer to let you in…', 'waiting');
+      setConnStatus("The interviewer isn't in the room yet. You'll connect as soon as they open it.", 'waiting');
     } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
-      setConnStatus('trouble reaching the signaling server — check your connection', 'error');
+      setConnStatus("Can't reach the connection server. Check your internet connection.", 'error');
     } else if (err.type === 'unavailable-id') {
-      setConnStatus('this room code is already in use — go back and create a new one', 'error');
+      setConnStatus('This room is already open in another tab or browser. Close it there, or start a new interview.', 'error');
     }
   });
 
@@ -1783,8 +2645,8 @@ console.log(JSON.stringify(__mm_result));
     if (role === 'candidate' && connectAttempts > 0) return; // already showing "waiting for the interviewer"
     setConnStatus(
       role === 'candidate'
-        ? 'still trying to connect — this can take longer on some networks'
-        : 'still waiting for your candidate to connect',
+        ? 'Still connecting — this can take a little longer on some networks…'
+        : 'Waiting for your candidate',
       'waiting'
     );
   }, 12000);

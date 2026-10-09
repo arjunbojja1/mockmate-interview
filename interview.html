@@ -3,70 +3,111 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MockMate — Interview Room</title>
-<link rel="stylesheet" href="style.css?v=18" />
+<title>Onsite — Interview room</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
+<link rel="stylesheet" href="style.css?v=32" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
-  <div class="topbar">
+  <header class="topbar">
     <div class="topbar-left">
-      <div class="brand">
-        <div class="brand-mark">M</div>
-        <span class="brand-name">MockMate</span>
-      </div>
-      <div class="topbar-divider"></div>
-      <div class="room-code-pill">room <span class="room-code-chip" id="roomChip">------</span></div>
-      <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">waiting for peer</span></span>
+      <a class="brand" href="index.html" aria-label="Onsite home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Onsite</span>
+      </a>
+      <button class="room-code-pill" id="roomCodePill" type="button" title="Copy invite link">
+        <span class="room-code-label">Room</span>
+        <span class="room-code-chip" id="roomChip">------</span>
+      </button>
+      <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">Waiting for your candidate</span></span>
     </div>
     <div class="topbar-right">
-      <span class="timer" id="timer">45:00</span>
-      <button class="mini-btn reveal hidden" id="startTimerBtn">Start timer</button>
-      <button class="mini-btn hidden" id="copyRoomLink">Copy invite link</button>
-      <button class="mini-btn deny hidden" id="endAccessBtn">End access</button>
       <span class="verdict-badge hidden" id="verdictBadge"></span>
-      <div class="topbar-divider"></div>
-      <a href="index.html" class="leave-link" id="leaveLink">Leave</a>
+      <div class="timer-group">
+        <select class="duration-select hidden" id="durationSelect" aria-label="Interview length">
+          <option value="30">30 min</option>
+          <option value="45" selected>45 min</option>
+          <option value="60">60 min</option>
+          <option value="90">90 min</option>
+        </select>
+        <span class="timer" id="timer">45:00</span>
+        <button class="btn btn-primary btn-sm hidden" id="startTimerBtn" type="button">Start interview</button>
+      </div>
+      <button class="btn btn-sm hidden" id="copyRoomLink" type="button">Copy invite link</button>
+      <button class="btn btn-sm btn-danger-quiet hidden" id="endAccessBtn" type="button">Remove candidate</button>
+      <a href="index.html" class="btn btn-sm btn-ghost leave-link" id="leaveLink">Leave</a>
     </div>
-  </div>
+  </header>
 
   <div class="error-banner hidden" id="errorBanner"></div>
 
-  <div class="admit-banner hidden" id="admitBanner">
+  <div class="admit-banner hidden" id="admitBanner" role="alert">
     <span id="admitBannerText"></span>
-    <button class="mini-btn reveal" id="admitBtn">Let them in</button>
-    <button class="mini-btn deny" id="denyBtn">Deny</button>
+    <button class="btn btn-sm btn-go" id="admitBtn" type="button">Let them in</button>
+    <button class="btn btn-sm btn-ghost-inverse" id="denyBtn" type="button">Deny</button>
   </div>
 
   <div class="waiting-overlay hidden" id="waitingOverlay">
     <div class="waiting-box">
-      <div class="waiting-dot"></div>
-      <p id="waitingText">Connecting…</p>
+      <span class="brand-mark brand-mark-lg" aria-hidden="true"></span>
+      <p class="waiting-title" id="waitingTitle">Joining room <span id="waitingRoom"></span></p>
+      <p class="waiting-text" id="waitingText">Connecting…</p>
+      <form class="name-form hidden" id="nameForm">
+        <label for="nameFormInput">Your name, so the interviewer knows who's asking to join</label>
+        <div class="name-form-row">
+          <input id="nameFormInput" autocomplete="name" maxlength="40" placeholder="Full name" required />
+          <button class="btn btn-primary" type="submit">Ask to join</button>
+        </div>
+      </form>
     </div>
   </div>
 
   <div class="session-end-overlay hidden" id="sessionEndOverlay">
     <div class="session-end-box">
-      <div class="session-end-title">You failed</div>
-      <p id="sessionEndReason">The interviewer marked this as a fail.</p>
-      <button class="mini-btn hidden" id="sessionEndResetBtn">Reset for next candidate</button>
+      <div class="session-end-title" id="sessionEndTitle">Interview ended</div>
+      <p id="sessionEndReason">The interviewer ended the interview.</p>
+      <button class="btn hidden" id="sessionEndResetBtn" type="button">Reset for next candidate</button>
     </div>
   </div>
 
-  <div class="main-layout">
-    <div class="editor-pane">
+  <div class="replay-overlay hidden" id="replayOverlay" role="dialog" aria-modal="true" aria-labelledby="replayTitle">
+    <div class="replay-box">
+      <div class="replay-head">
+        <h2 id="replayTitle">Code playback</h2>
+        <button class="btn btn-sm btn-ghost" id="replayClose" type="button">Close</button>
+      </div>
+      <div class="replay-editor"><textarea id="replayArea"></textarea></div>
+      <div class="replay-controls">
+        <button class="btn btn-sm btn-primary replay-play" id="replayPlay" type="button">Play</button>
+        <div class="replay-track">
+          <div class="replay-markers" id="replayMarkers"></div>
+          <input type="range" id="replaySlider" min="0" max="0" value="0" aria-label="Playback position" />
+        </div>
+        <span class="replay-time" id="replayTime">0:00</span>
+        <select id="replaySpeed" aria-label="Playback speed">
+          <option value="4">4×</option>
+          <option value="10" selected>10×</option>
+          <option value="30">30×</option>
+        </select>
+      </div>
+      <p class="replay-legend"><span class="mk mk-paste"></span>Paste <span class="mk mk-away"></span>Left the tab <span class="mk mk-run"></span>Code run</p>
+    </div>
+  </div>
+
+  <main class="main-layout">
+    <section class="editor-pane" aria-label="Code editor">
       <div class="editor-toolbar">
-        <select id="langSelect">
+        <select id="langSelect" aria-label="Language">
           <option value="python" selected>Python</option>
           <option value="javascript">JavaScript</option>
           <option value="cpp">C++</option>
           <option value="java">Java</option>
         </select>
-        <button class="run" id="runBtn">Run</button>
-        <button id="runTestsBtn">Run tests</button>
-        <button id="clearOutputBtn">Clear output</button>
-        <button id="formatCodeBtn" title="Reindent the code (Cmd/Ctrl+Shift+F)">Format</button>
+        <button class="btn btn-sm btn-dark btn-run" id="runBtn" type="button" title="Run (Cmd/Ctrl+Enter)">Run</button>
+        <button class="btn btn-sm btn-dark" id="runTestsBtn" type="button">Run tests</button>
+        <button class="btn btn-sm btn-dark" id="formatCodeBtn" type="button" title="Format with Ruff (Python) or clang-format (C++/Java/JS) — Cmd/Ctrl+Shift+F">Format</button>
         <div class="toolbar-spacer"></div>
-        <button id="whiteboardToggle">Whiteboard</button>
+        <button class="btn btn-sm btn-dark" id="whiteboardToggle" type="button">Whiteboard</button>
       </div>
       <div class="editor-surface" id="editorSurface">
         <textarea id="codeArea"></textarea>
@@ -76,8 +117,8 @@
             <div class="wb-tools" id="wbTools">
               <button class="wb-tool active" data-tool="select" title="Select / move / resize" type="button">Select</button>
               <button class="wb-tool" data-tool="pen" title="Pen" type="button">Pen</button>
-              <button class="wb-tool" data-tool="rect" title="Rectangle" type="button">Rect</button>
-              <button class="wb-tool" data-tool="ellipse" title="Ellipse" type="button">Ellipse</button>
+              <button class="wb-tool" data-tool="rect" title="Rectangle" type="button">Box</button>
+              <button class="wb-tool" data-tool="ellipse" title="Ellipse" type="button">Circle</button>
               <button class="wb-tool" data-tool="line" title="Line" type="button">Line</button>
               <button class="wb-tool" data-tool="arrow" title="Arrow" type="button">Arrow</button>
               <button class="wb-tool" data-tool="text" title="Text" type="button">Text</button>
@@ -85,75 +126,95 @@
             </div>
             <div class="wb-sep"></div>
             <div class="wb-colors" id="wbColors">
-              <button class="wb-color active" data-color="#1C222A" style="background:#1C222A" title="Ink" type="button"></button>
-              <button class="wb-color" data-color="#2C5AA0" style="background:#2C5AA0" title="Blue" type="button"></button>
-              <button class="wb-color" data-color="#2F8F5B" style="background:#2F8F5B" title="Green" type="button"></button>
-              <button class="wb-color" data-color="#B8453B" style="background:#B8453B" title="Red" type="button"></button>
-              <button class="wb-color" data-color="#B8862E" style="background:#B8862E" title="Amber" type="button"></button>
+              <button class="wb-color active" data-color="#1A2238" style="background:#1A2238" title="Black marker" type="button"></button>
+              <button class="wb-color" data-color="#2648D8" style="background:#2648D8" title="Blue marker" type="button"></button>
+              <button class="wb-color" data-color="#16865A" style="background:#16865A" title="Green marker" type="button"></button>
+              <button class="wb-color" data-color="#D6382F" style="background:#D6382F" title="Red marker" type="button"></button>
             </div>
             <div class="wb-sep"></div>
             <div class="wb-widths" id="wbWidths">
-              <button class="wb-width" data-width="1.5" title="Thin" type="button"><span></span></button>
+              <button class="wb-width" data-width="1.5" title="Fine" type="button"><span></span></button>
               <button class="wb-width active" data-width="2.5" title="Medium" type="button"><span></span></button>
-              <button class="wb-width" data-width="5" title="Thick" type="button"><span></span></button>
+              <button class="wb-width" data-width="5" title="Chisel" type="button"><span></span></button>
             </div>
             <div class="wb-sep"></div>
-            <button class="mini-btn" id="wbUndo" title="Undo (Cmd/Ctrl+Z)" type="button">Undo</button>
-            <button class="mini-btn" id="wbRedo" title="Redo (Cmd/Ctrl+Shift+Z)" type="button">Redo</button>
+            <button class="btn btn-xs" id="wbUndo" title="Undo (Cmd/Ctrl+Z)" type="button">Undo</button>
+            <button class="btn btn-xs" id="wbRedo" title="Redo (Cmd/Ctrl+Shift+Z)" type="button">Redo</button>
             <div class="wb-sep"></div>
-            <button class="mini-btn" id="wbZoomOut" title="Zoom out" type="button">−</button>
-            <button class="mini-btn" id="wbZoomReset" title="Reset view" type="button">100%</button>
-            <button class="mini-btn" id="wbZoomIn" title="Zoom in" type="button">+</button>
+            <button class="btn btn-xs" id="wbZoomOut" title="Zoom out" type="button">−</button>
+            <button class="btn btn-xs" id="wbZoomReset" title="Reset view" type="button">100%</button>
+            <button class="btn btn-xs" id="wbZoomIn" title="Zoom in" type="button">+</button>
             <div class="toolbar-spacer"></div>
-            <button class="mini-btn deny" id="wbClear" type="button">Clear board</button>
+            <button class="btn btn-xs btn-danger-quiet" id="wbClear" type="button">Erase board</button>
           </div>
           <div class="wb-canvas-wrap">
             <canvas id="wbCanvas"></canvas>
           </div>
         </div>
       </div>
-      <div class="output-pane" id="outputPane">Output shows up here once you run your code.</div>
-    </div>
-
-    <div class="resize-handle" id="resizeHandle"></div>
-
-    <div class="side-pane" id="sidePane">
-      <div class="tab-bar" id="tabBar">
-        <button class="tab-btn tab-question active" data-tab="question" type="button">Question</button>
-        <button class="tab-btn tab-tests" data-tab="tests" type="button">Tests</button>
-        <button class="tab-btn tab-notes hidden" id="notesTabBtn" data-tab="notes" type="button">Notes</button>
-        <button class="tab-btn tab-feedback hidden" id="feedbackTabBtn" data-tab="feedback" type="button">Feedback</button>
+      <div class="output-head">
+        <span>Output</span>
+        <span class="output-private hidden" id="outputPrivate">Only you can see this</span>
+        <button class="output-clear" id="clearOutputBtn" type="button">Clear</button>
       </div>
+      <div class="output-pane" id="outputPane">Run your code to see output here.</div>
+    </section>
+
+    <div class="resize-handle" id="resizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize side panel"></div>
+
+    <aside class="side-pane" id="sidePane">
+      <div class="invite-card hidden" id="inviteCard">
+        <p class="invite-title">Invite your candidate</p>
+        <p class="invite-text">Send them this link. You'll be asked to let them in when they arrive.</p>
+        <div class="invite-row">
+          <code class="invite-link" id="inviteLinkText"></code>
+          <button class="btn btn-sm btn-primary" id="inviteCopyBtn" type="button">Copy</button>
+        </div>
+      </div>
+
+      <nav class="tab-bar" id="tabBar" role="tablist">
+        <button class="tab-btn active" data-tab="question" type="button" role="tab">Question</button>
+        <button class="tab-btn" data-tab="tests" type="button" role="tab">Tests</button>
+        <button class="tab-btn hidden" id="notesTabBtn" data-tab="notes" type="button" role="tab">Log</button>
+        <button class="tab-btn hidden" id="feedbackTabBtn" data-tab="feedback" type="button" role="tab">Scorecard</button>
+      </nav>
 
       <div class="tab-panels">
         <div class="tab-panel active" data-panel="question">
           <div class="question-pane">
             <div class="side-header-row">
               <div class="question-actions" id="interviewerQuestionActions">
-                <button class="mini-btn" id="importLeetcodeBtn">Import from LeetCode</button>
-                <button class="mini-btn reveal" id="revealBtn">Show to candidate</button>
+                <button class="btn btn-sm" id="importLeetcodeBtn" type="button">Choose a question</button>
+                <button class="btn btn-sm btn-primary reveal" id="revealBtn" type="button">Show to candidate</button>
               </div>
-              <span class="hidden-note hidden" id="candidateHiddenNote">not shared yet</span>
+              <span class="hidden-note hidden" id="candidateHiddenNote">Your interviewer will share the question here.</span>
             </div>
-            <div class="question-meta" id="questionMeta">
+            <div class="question-meta" id="questionMeta" role="group" aria-label="Difficulty">
               <button class="difficulty-btn difficulty-easy" data-difficulty="easy" type="button">Easy</button>
               <button class="difficulty-btn difficulty-medium" data-difficulty="medium" type="button">Medium</button>
               <button class="difficulty-btn difficulty-hard" data-difficulty="hard" type="button">Hard</button>
             </div>
             <div class="question-badges hidden" id="questionBadges"></div>
-            <textarea id="questionArea" placeholder="Paste the question, constraints, and examples here."></textarea>
+            <textarea id="questionArea" placeholder="Write or paste the problem, constraints, and examples — or choose one from the question bank."></textarea>
 
             <div class="import-panel hidden" id="importPanel">
-              <p class="import-hint">Paste a LeetCode problem URL and click Fetch to pull difficulty, description, and test cases automatically (via the community alfa-leetcode-api). Doesn't work for premium-only problems, or if that service is down — paste the problem text below instead as a fallback.</p>
-              <div class="import-fetch-row">
-                <input id="importUrlInput" placeholder="https://leetcode.com/problems/two-sum/" autocomplete="off" />
-                <button class="mini-btn reveal" id="importFetchBtn" type="button">Fetch</button>
+              <div class="import-section">
+                <p class="import-label">Question bank</p>
+                <p class="import-hint">Loads the problem, starter code, test cases, and a reference approach into your private notes.</p>
+                <div class="bank-list" id="bankList"></div>
               </div>
-              <p class="import-hint">Or paste manually (select all on the LeetCode page, copy, paste below):</p>
-              <textarea id="importPasteArea" placeholder="Paste the whole LeetCode problem page here…"></textarea>
-              <div class="import-actions">
-                <button class="mini-btn" id="importCancelBtn">Cancel</button>
-                <button class="mini-btn" id="importConfirmBtn">Parse pasted text</button>
+              <div class="import-section">
+                <p class="import-label">From LeetCode</p>
+                <p class="import-hint">Paste a problem URL to pull its description, difficulty, and examples. Premium problems can't be fetched — paste the page text below instead.</p>
+                <div class="import-fetch-row">
+                  <input id="importUrlInput" placeholder="https://leetcode.com/problems/two-sum/" autocomplete="off" />
+                  <button class="btn btn-sm btn-primary" id="importFetchBtn" type="button">Fetch</button>
+                </div>
+                <textarea id="importPasteArea" placeholder="Or paste the whole problem page here…"></textarea>
+                <div class="import-actions">
+                  <button class="btn btn-sm btn-ghost" id="importCancelBtn" type="button">Cancel</button>
+                  <button class="btn btn-sm" id="importConfirmBtn" type="button">Use pasted text</button>
+                </div>
               </div>
             </div>
           </div>
@@ -162,47 +223,52 @@
         <div class="tab-panel" data-panel="tests">
           <div class="testcase-pane hidden" id="testcasePane">
             <div class="side-header-row tests-header-row">
-              <button class="mini-btn" id="addTestcaseBtn">+ Add case</button>
+              <p class="testcase-hint" id="testcaseHint">Input takes one JSON value per argument, one per line. Hidden cases are never shown to the candidate.</p>
+              <button class="btn btn-sm" id="addTestcaseBtn" type="button">Add case</button>
             </div>
-            <p class="testcase-hint" id="testcaseHint">One JSON argument per line for input (e.g. two lines for a two-argument function). Comparison is exact — if a problem's output order isn't fixed (like groupAnagrams), a correct solution can still show FAIL, so eyeball the output.</p>
             <div id="testcaseList"></div>
           </div>
         </div>
 
         <div class="tab-panel" data-panel="notes">
-          <div class="solution-pane hidden" id="solutionPane">
-            <div class="side-header">solution — only you see this</div>
-            <textarea id="solutionArea" placeholder="Jot the expected approach, complexity, or reference solution. Never sent to the candidate."></textarea>
+          <div class="paste-log hidden" id="pasteLog">
+            <form class="log-form" id="logForm">
+              <input id="logInput" placeholder="Add a note — stamped with the interview clock" autocomplete="off" />
+            </form>
+            <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">Notes you add, pastes, tab switches, and test runs appear here in order.</div></div>
           </div>
 
-          <div class="paste-log hidden" id="pasteLog">
-            <div class="side-header">activity — only you see this</div>
-            <div class="paste-log-list" id="pasteLogList"><div class="paste-log-empty">No activity yet.</div></div>
+          <div class="solution-pane hidden" id="solutionPane">
+            <label class="side-header" for="solutionArea">Reference solution</label>
+            <textarea id="solutionArea" placeholder="Expected approach, complexity, follow-ups. Never sent to the candidate."></textarea>
           </div>
         </div>
 
         <div class="tab-panel" data-panel="feedback">
           <div class="feedback-pane hidden" id="feedbackPane">
             <div class="feedback-scores" id="feedbackScores"></div>
-            <textarea id="feedbackSummary" placeholder="Overall summary — strengths, gaps, would you move them forward?"></textarea>
+            <textarea id="feedbackSummary" placeholder="Summary: strengths, gaps, and whether you'd move them forward."></textarea>
             <div class="verdict-buttons">
-              <button class="verdict-btn pass" id="passBtn">Pass</button>
-              <button class="verdict-btn fail" id="failBtn">No pass</button>
-              <button class="verdict-btn clear" id="clearVerdictBtn">Clear</button>
+              <button class="verdict-btn pass" id="passBtn" type="button">Pass</button>
+              <button class="verdict-btn fail" id="failBtn" type="button">No pass</button>
+              <button class="verdict-btn clear" id="clearVerdictBtn" type="button">Clear</button>
             </div>
-            <button class="mini-btn copy-feedback" id="copyFeedbackBtn">Copy session summary</button>
-            <button class="mini-btn reset-room" id="resetRoomBtn">Reset for next candidate</button>
+            <div class="feedback-actions">
+              <button class="btn btn-sm" id="replayBtn" type="button">Play back the code</button>
+              <button class="btn btn-sm copy-feedback" id="copyFeedbackBtn" type="button">Copy summary</button>
+            </div>
+            <button class="btn btn-sm btn-danger-quiet reset-room" id="resetRoomBtn" type="button">Reset for next candidate</button>
           </div>
         </div>
       </div>
-    </div>
-  </div>
+    </aside>
+  </main>
 
 <script>
 window.addEventListener('error', function (e) {
   var el = document.getElementById('errorBanner');
   if (!el) return;
-  el.textContent = 'Something failed to load (' + (e.message || 'script error') + '). Try a hard refresh — if it keeps happening, this browser may be blocking a required script.';
+  el.textContent = 'Something failed to load (' + (e.message || 'script error') + '). Hard-refresh the page; if it keeps happening, this browser may be blocking a required script.';
   el.classList.remove('hidden');
 });
 // If the browser restores this page from its back-forward cache (common on
@@ -217,7 +283,11 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/mode/clike/clike.min.js"></script>
 <script src="vendor/codemirror/mode/python/python.min.js"></script>
 <script src="vendor/codemirror/addon/comment/comment.min.js"></script>
+<script src="vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="vendor/codemirror/addon/edit/closebrackets.js"></script>
+<script src="vendor/codemirror/addon/selection/active-line.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="app.js?v=21"></script>
+<script src="questions.js?v=30"></script>
+<script src="app.js?v=37"></script>
 </body>
 </html>

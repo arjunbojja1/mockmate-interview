@@ -3,82 +3,94 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MockMate — Practice Interviews</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%231C222A%22/><text x=%2250%22 y=%2268%22 font-size=%2258%22 text-anchor=%22middle%22 fill=%22%23EBEDE5%22 font-family=%22Georgia,serif%22>M</text></svg>" />
-<link rel="stylesheet" href="style.css?v=18" />
+<title>Onsite — Run coding interviews in the browser</title>
+<meta name="description" content="Share a link, write and run code together, sketch on a whiteboard, and score the candidate privately. No installs, no accounts." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
+<link rel="stylesheet" href="style.css?v=32" />
 </head>
 <body class="landing">
-  <div class="landing-wrap">
-    <div class="brand">
-      <div class="brand-mark">M</div>
-      <span class="brand-name">MockMate</span>
-    </div>
+  <header class="landing-top">
+    <a class="brand" href="index.html">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Onsite</span>
+    </a>
+    <a class="btn btn-sm btn-ghost" href="#history" id="historyLink">Past interviews</a>
+  </header>
 
-    <h1>Practice the interview, not just the problem.</h1>
-    <p class="sub">Pick a role, share a room code, and work a problem together in a live shared editor. Nothing to install, nothing saved after you close the tab.</p>
+  <div id="homeView">
+    <main class="landing-main">
+      <div>
+        <h1>The coding interview, in one tab.</h1>
+        <p class="lede">Share a link, write and run code together, sketch on a whiteboard, and score the candidate privately as you go. No installs, no accounts.</p>
 
-    <div class="role-cards" id="roleCards">
-      <button class="role-card" data-role="interviewer">
-        <svg width="34" height="34" viewBox="0 0 34 34" fill="none" class="role-icon">
-          <circle cx="13" cy="13" r="7" stroke="currentColor" stroke-width="1.6"/>
-          <circle cx="22" cy="21" r="7" stroke="currentColor" stroke-width="1.6" opacity="0.4"/>
-        </svg>
-        <span class="role-tag">host</span>
-        <div class="role-title">I'm the interviewer</div>
-        <div class="role-desc">Create a room and share the code</div>
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" class="role-arrow"><path d="M4 9H14M14 9L10 5M14 9L10 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button class="role-card" data-role="candidate">
-        <svg width="34" height="34" viewBox="0 0 34 34" fill="none" class="role-icon">
-          <rect x="6" y="9" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
-          <path d="M10 9V7a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="1.6"/>
-        </svg>
-        <span class="role-tag">join</span>
-        <div class="role-title">I'm the candidate</div>
-        <div class="role-desc">Enter a room code to join</div>
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" class="role-arrow"><path d="M4 9H14M14 9L10 5M14 9L10 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
+        <div class="start-block">
+          <button class="btn btn-primary" id="startInterviewBtn" type="button">Start an interview</button>
+          <fieldset class="length-picker">
+            <legend>Interview length</legend>
+            <label><input type="radio" name="length" value="30" />30</label>
+            <label><input type="radio" name="length" value="45" checked />45</label>
+            <label><input type="radio" name="length" value="60" />60</label>
+            <label><input type="radio" name="length" value="90" />90</label>
+            <span class="length-suffix">min</span>
+          </fieldset>
+        </div>
 
-    <div class="panel hidden" id="interviewerPanel">
-      <h2>Your room is ready</h2>
-      <p class="hint">Send this code to your candidate.</p>
-      <div class="code-display" id="roomCodeOut">------</div>
-      <button class="primary-btn" id="copyInviteLink">Copy invite link</button>
-      <button class="primary-btn secondary" id="enterAsInterviewer">Enter room</button>
-      <button class="link-btn" id="backFromInterviewer">back</button>
-    </div>
+        <form class="join-form" id="joinForm" novalidate>
+          <label for="joinCodeInput">Joining as a candidate?</label>
+          <input id="joinCodeInput" placeholder="Room code" autocomplete="off" maxlength="12" spellcheck="false" />
+          <input id="candidateNameInput" placeholder="Your name" autocomplete="name" maxlength="40" />
+          <button class="btn" type="submit">Join</button>
+          <p class="form-error hidden" id="joinError" role="alert"></p>
+        </form>
+      </div>
 
-    <div class="panel hidden" id="candidatePanel">
-      <h2>Join a room</h2>
-      <p class="hint">Ask your interviewer for the room code.</p>
-      <input id="joinCodeInput" placeholder="Room code" autocomplete="off" />
-      <input id="candidateNameInput" placeholder="Your name" autocomplete="off" />
-      <button class="primary-btn" id="enterAsCandidate">Join room</button>
-      <button class="link-btn" id="backFromCandidate">back</button>
-    </div>
+      <figure class="preview" aria-label="Preview of an interview room">
+        <div class="preview-bar">
+          <span class="pv-room">K7Q2PX</span>
+          <span class="pv-live">Maya is here</span>
+          <span class="pv-spacer"></span>
+          <span class="pv-clock" id="pvClock">31:48</span>
+        </div>
+<pre class="preview-code" aria-hidden="true"><span class="ln"><span class="pv-k">class</span> <span class="pv-f">Solution</span>:</span><span class="ln">    <span class="pv-k">def</span> <span class="pv-f">lengthOfLongestSubstring</span>(self, s: str) -&gt; int:</span><span class="ln">        last = {}</span><span class="ln">        left = best = <span class="pv-n">0</span></span><span class="ln">        <span class="pv-k">for</span> right, ch <span class="pv-k">in</span> enumerate(s):</span><span class="ln">            <span class="pv-k">if</span> ch <span class="pv-k">in</span> last:</span><span class="ln">                <span class="pv-c"># max(): "abba" must not move left back</span></span><span class="ln">                left = max(left, last[ch] + <span class="pv-n">1</span>)</span><span class="ln">            last[ch] = right</span><span class="ln">            <span id="pvTyped"></span><span class="pv-cursor"><span class="pv-cursor-flag">Maya</span></span></span></pre>
+        <div class="preview-foot">
+          <span><strong>3/3</strong> visible cases passing</span>
+          <span class="pv-hidden">2 hidden cases only you can see</span>
+        </div>
+      </figure>
+    </main>
 
-    <button class="link-btn" id="historyLink">Past sessions</button>
+    <section class="features" aria-label="What's in the room">
+      <div class="feature">
+        <h2>Code that runs</h2>
+        <p>Python, JavaScript, C++, and Java run against your test cases, and Format applies Ruff or clang-format.</p>
+      </div>
+      <div class="feature">
+        <h2>A scorecard only you see</h2>
+        <p>Rate as you go, take notes stamped with the interview clock, and keep hidden cases and run output to yourself.</p>
+      </div>
+      <div class="feature">
+        <h2>Play back the solution</h2>
+        <p>Replay every edit afterward, with pastes, tab switches, and test runs marked on the timeline.</p>
+      </div>
+      <div class="feature">
+        <h2>Questions ready to go</h2>
+        <p>Pick from a starter bank with test cases and reference approaches, or pull a problem from LeetCode.</p>
+      </div>
+    </section>
 
-    <div class="panel hidden" id="historyPanel">
-      <h2>Past sessions</h2>
-      <p class="hint">Saved only in this browser — never sent anywhere.</p>
-      <div id="historyList"></div>
-      <button class="link-btn" id="backFromHistory">back</button>
-    </div>
-
-    <footer>Practice tool for mock interviews — not affiliated with any interview platform.</footer>
+    <footer class="landing-foot">Connections are peer-to-peer. Code runs on the public Judge0 service; scorecards stay in your browser.</footer>
   </div>
+
+  <section class="history-panel hidden" id="historyView" aria-labelledby="historyTitle">
+    <h1 id="historyTitle">Past interviews</h1>
+    <p class="hint">Saved in this browser when you leave a room or reset it for the next candidate. Never uploaded.</p>
+    <div id="historyList"></div>
+  </section>
 
 <script>
 window.addEventListener('pageshow', function (e) {
   if (e.persisted) window.location.reload();
 });
-const urlParams = new URLSearchParams(window.location.search);
-const roleCards = document.getElementById('roleCards');
-const interviewerPanel = document.getElementById('interviewerPanel');
-const candidatePanel = document.getElementById('candidatePanel');
-const roomCodeOut = document.getElementById('roomCodeOut');
 
 function randomCode(len = 6) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -87,108 +99,104 @@ function randomCode(len = 6) {
   return out;
 }
 
-document.querySelectorAll('.role-card').forEach(btn => {
-  btn.addEventListener('click', () => {
-    roleCards.classList.add('hidden');
-    if (btn.dataset.role === 'interviewer') {
-      interviewerPanel.classList.remove('hidden');
-      const code = randomCode();
-      roomCodeOut.textContent = code;
-      roomCodeOut.dataset.code = code;
-    } else {
-      candidatePanel.classList.remove('hidden');
-    }
-  });
+document.getElementById('startInterviewBtn').addEventListener('click', () => {
+  const length = document.querySelector('input[name="length"]:checked').value;
+  window.location.href = `interview.html?room=${randomCode()}&role=interviewer&duration=${length}`;
 });
 
-document.getElementById('backFromInterviewer').addEventListener('click', () => {
-  interviewerPanel.classList.add('hidden');
-  roleCards.classList.remove('hidden');
-});
-document.getElementById('backFromCandidate').addEventListener('click', () => {
-  candidatePanel.classList.add('hidden');
-  roleCards.classList.remove('hidden');
-});
+const joinForm = document.getElementById('joinForm');
+const joinCodeInput = document.getElementById('joinCodeInput');
+const nameInput = document.getElementById('candidateNameInput');
+const joinError = document.getElementById('joinError');
+try { nameInput.value = localStorage.getItem('onsite-name') || ''; } catch {}
 
-document.getElementById('enterAsInterviewer').addEventListener('click', () => {
-  const code = roomCodeOut.dataset.code;
-  window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=interviewer&name=${encodeURIComponent('Interviewer')}`;
-});
-
-document.getElementById('copyInviteLink').addEventListener('click', async (e) => {
-  const code = roomCodeOut.dataset.code;
-  const base = window.location.href.replace(/index\.html.*$/, '').replace(/\/$/, '');
-  const link = `${base}/interview.html?room=${encodeURIComponent(code)}&role=candidate`;
-  const btn = e.currentTarget;
-  const original = btn.textContent;
-  try {
-    await navigator.clipboard.writeText(link);
-    btn.textContent = 'Link copied';
-  } catch {
-    window.prompt('Copy this link:', link);
-  }
-  setTimeout(() => { btn.textContent = original; }, 1800);
-});
-
-document.getElementById('enterAsCandidate').addEventListener('click', () => {
-  const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
-  const name = document.getElementById('candidateNameInput').value.trim() || 'Candidate';
-  if (!code) { alert('Enter a room code'); return; }
+joinForm.addEventListener('submit', e => {
+  e.preventDefault();
+  // Accept a pasted invite link as well as a bare code.
+  const raw = joinCodeInput.value.trim();
+  const fromLink = raw.match(/[?&]room=([A-Za-z0-9]+)/);
+  const code = (fromLink ? fromLink[1] : raw).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const name = nameInput.value.trim();
+  if (!code) { showJoinError('Enter the room code from your invite.'); joinCodeInput.focus(); return; }
+  if (!name) { showJoinError('Enter your name so the interviewer knows who is joining.'); nameInput.focus(); return; }
+  try { localStorage.setItem('onsite-name', name); } catch {}
   window.location.href = `interview.html?room=${encodeURIComponent(code)}&role=candidate&name=${encodeURIComponent(name)}`;
 });
-
-const prefillRoom = urlParams.get('room');
-if (prefillRoom) {
-  roleCards.classList.add('hidden');
-  candidatePanel.classList.remove('hidden');
-  document.getElementById('joinCodeInput').value = prefillRoom.toUpperCase();
-  document.getElementById('candidateNameInput').focus();
+function showJoinError(text) {
+  joinError.textContent = text;
+  joinError.classList.remove('hidden');
 }
 
+const prefillRoom = new URLSearchParams(window.location.search).get('room');
+if (prefillRoom) {
+  joinCodeInput.value = prefillRoom.toUpperCase();
+  nameInput.focus();
+}
+
+// Preview: the clock ticks and the candidate finishes the line.
+(function () {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const typed = document.getElementById('pvTyped');
+  const line = 'best = max(best, right - left + 1)';
+  if (reduce) { typed.textContent = line; return; }
+  let i = 0;
+  setTimeout(function type() {
+    typed.textContent = line.slice(0, ++i);
+    if (i < line.length) setTimeout(type, 55 + Math.random() * 90);
+  }, 900);
+  const clock = document.getElementById('pvClock');
+  let remaining = 31 * 60 + 48;
+  setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    clock.textContent = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
+  }, 1000);
+})();
+
+// ---------- Past interviews ----------
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const historyPanel = document.getElementById('historyPanel');
-const historyList = document.getElementById('historyList');
-
-document.getElementById('historyLink').addEventListener('click', () => {
-  roleCards.classList.add('hidden');
-  interviewerPanel.classList.add('hidden');
-  candidatePanel.classList.add('hidden');
-  historyPanel.classList.remove('hidden');
-
+function renderHistory() {
+  const list = document.getElementById('historyList');
   let entries = [];
-  try { entries = JSON.parse(localStorage.getItem('mockmate-history') || '[]'); } catch {}
-
+  try { entries = JSON.parse(localStorage.getItem('onsite-history') || localStorage.getItem('mockmate-history') || '[]'); } catch {}
   if (!entries.length) {
-    historyList.innerHTML = '<p class="hint">No past sessions yet — they\'re saved here after you leave or reset a room as the interviewer.</p>';
+    list.innerHTML = '<p class="history-empty">No interviews yet. Start one, fill in the scorecard, and it shows up here when you leave the room.</p>';
     return;
   }
-
-  historyList.innerHTML = entries.map(e => {
-    const verdictLabel = e.verdict === 'pass' ? 'Pass' : e.verdict === 'fail' ? 'No pass' : 'Not set';
-    const scores = Object.entries(e.scores || {}).map(([k, v]) => `${escapeHtml(k)}: ${v}/4`).join(' · ');
+  list.innerHTML = entries.map(e => {
+    const verdictLabel = e.verdict === 'pass' ? 'Pass' : e.verdict === 'fail' ? 'No pass' : '';
+    const scores = Object.entries(e.scores || {}).map(([k, v]) => `${escapeHtml(k)} ${v}/4`).join(', ');
+    const meta = [new Date(e.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })];
+    if (e.durationMin != null) meta.push(`${e.durationMin} min`);
+    if (e.difficulty) meta.push(escapeHtml(e.difficulty));
     return `
-      <div class="history-entry">
+      <article class="history-entry">
         <div class="history-entry-top">
-          <span class="history-entry-name">${escapeHtml(e.candidateName || 'Candidate')}</span>
-          <span class="verdict-badge ${e.verdict === 'pass' ? 'pass' : e.verdict === 'fail' ? 'fail' : ''}">${verdictLabel}</span>
+          <span class="history-entry-name">${escapeHtml(e.candidateName || 'Unnamed candidate')}</span>
+          ${verdictLabel ? `<span class="verdict-badge ${e.verdict}">${verdictLabel}</span>` : ''}
         </div>
-        <div class="history-entry-meta">${new Date(e.date).toLocaleString()}${e.durationMin != null ? ' · ' + e.durationMin + ' min' : ''}${e.difficulty ? ' · ' + escapeHtml(e.difficulty) : ''}</div>
-        ${e.questionSnippet ? `<div class="history-entry-question">${escapeHtml(e.questionSnippet)}</div>` : ''}
+        <div class="history-entry-meta">${meta.join(', ')}</div>
         ${scores ? `<div class="history-entry-scores">${scores}</div>` : ''}
         ${e.summary ? `<div class="history-entry-summary">${escapeHtml(e.summary)}</div>` : ''}
-      </div>
-    `;
+        ${e.notes && e.notes.length ? `<ul class="history-entry-notes">${e.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
+        ${e.questionSnippet ? `<div class="history-entry-question">${escapeHtml(e.questionSnippet)}${e.questionSnippet.length >= 140 ? '…' : ''}</div>` : ''}
+      </article>`;
   }).join('');
-});
+}
 
-document.getElementById('backFromHistory').addEventListener('click', () => {
-  historyPanel.classList.add('hidden');
-  roleCards.classList.remove('hidden');
-});
-
+function route() {
+  const history = window.location.hash === '#history';
+  document.getElementById('homeView').classList.toggle('hidden', history);
+  document.getElementById('historyView').classList.toggle('hidden', !history);
+  const link = document.getElementById('historyLink');
+  link.textContent = history ? 'Back' : 'Past interviews';
+  link.setAttribute('href', history ? '#' : '#history');
+  if (history) renderHistory();
+}
+window.addEventListener('hashchange', route);
+route();
 </script>
 </body>
 </html>
