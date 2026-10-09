@@ -87,7 +87,7 @@
   .diff { text-transform: capitalize; font-weight: 700; }
   .diff-easy { color: var(--green); } .diff-medium { color: var(--amber); } .diff-hard { color: var(--red); }
   .code-label { margin: 0 0 6px; font-size: 13px; color: var(--ink-3); font-weight: 600; }
-  pre { margin: 0; padding: 16px 18px; background: #151B2D; color: #E4E8F2; border-radius: 10px; overflow: auto; font: 13px/1.6 'JetBrains Mono', ui-monospace, monospace; white-space: pre; }
+  pre { margin: 0; padding: 16px 18px; background: #151B2D; color: #E4E8F2; border-radius: 10px; overflow: auto; font: 13px/1.6 'JetBrains Mono', ui-monospace, monospace; white-space: pre; font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
   .muted { color: var(--ink-3); margin: 0; }
   .log { width: 100%; border-collapse: collapse; font-size: 14px; }
   .log td { padding: 7px 0; border-top: 1px solid var(--rule); vertical-align: top; color: var(--ink-2); }

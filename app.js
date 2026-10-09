@@ -44,11 +44,13 @@
   // Judge0 CE (ce.judge0.com) is a free, unauthenticated, CORS-open community
   // instance — used instead of Piston's public API, which went whitelist-only
   // as of Feb 2026 and no longer works for arbitrary sites.
+  // Current runtimes: LeetCode's stubs use modern syntax (list[int],
+  // ListNode | None) that older Python versions reject at definition time.
   const LANGS = {
-    python: { cmMode: 'python', judge0: 71, label: 'Python' },
-    javascript: { cmMode: 'javascript', judge0: 63, label: 'JavaScript' },
-    cpp: { cmMode: 'text/x-c++src', judge0: 54, label: 'C++' },
-    java: { cmMode: 'text/x-java', judge0: 62, label: 'Java' },
+    python: { cmMode: 'python', judge0: 100, label: 'Python' }, // Python 3.12
+    javascript: { cmMode: 'javascript', judge0: 102, label: 'JavaScript' }, // Node.js 22
+    cpp: { cmMode: 'text/x-c++src', judge0: 105, label: 'C++' }, // GCC 14
+    java: { cmMode: 'text/x-java', judge0: 91, label: 'Java' }, // JDK 17
   };
 
   // ---------- CodeMirror ----------
@@ -879,7 +881,7 @@
   // "Run tests" stays as the explicit/repeatable way to do the same.
   function runOrTest() {
     if (role !== 'interviewer') return;
-    return testCases.length ? runTests() : runCode();
+    return liveTestCases().length ? runTests() : runCode();
   }
   runBtn.addEventListener('click', runOrTest);
   runTestsBtn.addEventListener('click', runTests);
@@ -961,7 +963,18 @@
   // stdlib modules, so solutions routinely use List[int] / deque / heapq
   // without importing them. Mirror that, and shift traceback line numbers
   // back so they still match what the candidate sees in the editor.
-  const PY_PRELUDE = 'from typing import *\nfrom collections import *\nimport collections, heapq, math, bisect, itertools, functools, string, re\n';
+  // ListNode/TreeNode match LeetCode's definitions (its stubs only mention
+  // them in comments, because LeetCode predefines them too).
+  const PY_PRELUDE = [
+    'from typing import *',
+    'from collections import *',
+    'import collections, heapq, math, bisect, itertools, functools, string, re',
+    'class ListNode:',
+    '    def __init__(self, val=0, next=None): self.val, self.next = val, next',
+    'class TreeNode:',
+    '    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right',
+    '',
+  ].join('\n');
   const PY_PRELUDE_LINES = PY_PRELUDE.split('\n').length - 1;
   function withPrelude(langKey, code) {
     return langKey === 'python' && !/^from __future__/m.test(code) ? PY_PRELUDE + code : code;
@@ -985,32 +998,171 @@
     };
   }
 
-  function withDriver(langKey, code) {
-    if (langKey === 'python') {
-      const entry = detectPythonEntry(code);
-      if (!entry) return code;
-      return `${code}
-
+  // Test inputs use LeetCode's JSON conventions: a linked list is [1,2,3],
+  // a tree is level order with nulls ([3,9,20,null,null,15,7]). The
+  // drivers convert arguments whose declared type is ListNode/TreeNode
+  // (Python annotations, JS JSDoc) into real nodes, serialize node results
+  // back, and for "modify in place" functions (returning None/void) report
+  // the mutated first argument — which is what LeetCode's expected output
+  // shows for those problems.
+  const PY_DRIVER = `
 if __name__ == "__main__":
-    import json as _mm_json, sys as _mm_sys
+    import json as _mm_json, sys as _mm_sys, inspect as _mm_inspect
+    from collections import deque as _mm_deque
+
+    def _mm_kind(ann):
+        s = ann if isinstance(ann, str) else repr(ann)
+        return "list" if "ListNode" in s else "tree" if "TreeNode" in s else None
+
+    def _mm_list(a):
+        head = cur = ListNode()
+        for v in a:
+            cur.next = ListNode(v)
+            cur = cur.next
+        return head.next
+
+    def _mm_tree(a):
+        nodes = [None if v is None else TreeNode(v) for v in a]
+        kids = nodes[::-1]
+        root = kids.pop() if kids else None
+        for n in nodes:
+            if n:
+                if kids: n.left = kids.pop()
+                if kids: n.right = kids.pop()
+        return root
+
+    def _mm_find(root, val):
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n:
+                if n.val == val: return n
+                stack += [n.left, n.right]
+        return None
+
+    def _mm_out(o):
+        if isinstance(o, ListNode):
+            r, steps = [], 0
+            while o is not None and steps < 100000:
+                r.append(o.val); o = o.next; steps += 1
+            return r
+        if isinstance(o, TreeNode):
+            r, q = [], _mm_deque([o])
+            while q:
+                n = q.popleft()
+                if n is None: r.append(None)
+                else: r.append(n.val); q.append(n.left); q.append(n.right)
+            while r and r[-1] is None: r.pop()
+            return r
+        if isinstance(o, (list, tuple)): return [_mm_out(x) for x in o]
+        return o
+
+    _mm_fn = __ENTRY__
     _mm_args = [_mm_json.loads(l) for l in _mm_sys.stdin.read().splitlines() if l.strip()]
-    _mm_result = ${entry}(*_mm_args)
+    try:
+        _mm_sig = _mm_inspect.signature(_mm_fn)
+        _mm_params = [p for p in _mm_sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    except (TypeError, ValueError):
+        _mm_sig, _mm_params = None, []
+    if _mm_params and len(_mm_args) > len(_mm_params):
+        _mm_args = _mm_args[:len(_mm_params)]  # e.g. linked-list-cycle's extra "pos"
+    _mm_first_tree = None
+    for _i, _p in enumerate(_mm_params[:len(_mm_args)]):
+        _k = _mm_kind(_p.annotation)
+        _a = _mm_args[_i]
+        if _k == "list" and isinstance(_a, list):
+            _mm_args[_i] = [_mm_list(x) for x in _a] if _a and isinstance(_a[0], list) else _mm_list(_a)
+        elif _k == "tree" and isinstance(_a, list):
+            _mm_args[_i] = _mm_tree(_a)
+            _mm_first_tree = _mm_first_tree or _mm_args[_i]
+        elif _k == "tree" and _a is not None and _mm_first_tree is not None:
+            _mm_args[_i] = _mm_find(_mm_first_tree, _a)  # e.g. LCA's p and q
+    _mm_result = _mm_fn(*_mm_args)
+    if _mm_result is None and _mm_args and _mm_sig is not None and _mm_sig.return_annotation in (None, "None"):
+        _mm_result = _mm_args[0]
+    elif _mm_result is None and _mm_sig is not None and _mm_kind(_mm_sig.return_annotation):
+        _mm_result = []  # LeetCode writes an empty list/tree as []
     _mm_sys.stdout.flush()
     print("\\n${RESULT_MARKER}" + _mm_json.dumps(
-        _mm_result, separators=(",", ":"),
+        _mm_out(_mm_result), separators=(",", ":"),
         default=lambda o: sorted(o) if isinstance(o, (set, frozenset)) else list(o) if hasattr(o, "__iter__") else str(o)))
 `;
+
+  const JS_DRIVER = `
+if (typeof ListNode === 'undefined') globalThis.ListNode = function ListNode(val, next) { this.val = val === undefined ? 0 : val; this.next = next === undefined ? null : next; };
+if (typeof TreeNode === 'undefined') globalThis.TreeNode = function TreeNode(val, left, right) { this.val = val === undefined ? 0 : val; this.left = left === undefined ? null : left; this.right = right === undefined ? null : right; };
+const __mm_kind = t => !t ? null : /ListNode/.test(t) ? 'list' : /TreeNode/.test(t) ? 'tree' : null;
+const __mm_list = a => { const head = new ListNode(); let cur = head; for (const v of a) { cur.next = new ListNode(v); cur = cur.next; } return head.next; };
+const __mm_tree = a => {
+  const nodes = a.map(v => (v === null ? null : new TreeNode(v)));
+  const kids = nodes.slice().reverse();
+  const root = kids.length ? kids.pop() : null;
+  for (const n of nodes) if (n) { if (kids.length) n.left = kids.pop(); if (kids.length) n.right = kids.pop(); }
+  return root;
+};
+const __mm_find = (root, val) => { const st = [root]; while (st.length) { const n = st.pop(); if (n) { if (n.val === val) return n; st.push(n.left, n.right); } } return null; };
+const __mm_out = o => {
+  if (o && typeof o === 'object' && 'next' in o && 'val' in o && !('left' in o)) { const r = []; let steps = 0; while (o && steps++ < 100000) { r.push(o.val); o = o.next; } return r; }
+  if (o && typeof o === 'object' && 'left' in o && 'right' in o && 'val' in o) {
+    const r = [], q = [o];
+    while (q.length) { const n = q.shift(); if (n) { r.push(n.val); q.push(n.left, n.right); } else r.push(null); }
+    while (r.length && r[r.length - 1] === null) r.pop();
+    return r;
+  }
+  if (Array.isArray(o)) return o.map(__mm_out);
+  return o;
+};
+let __mm_args = require('fs').readFileSync(0, 'utf8').split(/\\r?\\n/).filter(l => l.trim() !== '').map(l => JSON.parse(l));
+const __mm_types = __PARAM_TYPES__;
+const __mm_ret = __RETURN_TYPE__;
+if (__mm_types.length && __mm_args.length > __mm_types.length) __mm_args = __mm_args.slice(0, __mm_types.length);
+let __mm_firstTree = null;
+__mm_args = __mm_args.map((a, i) => {
+  const k = __mm_kind(__mm_types[i]);
+  if (k === 'list' && Array.isArray(a)) return a.length && Array.isArray(a[0]) ? a.map(__mm_list) : __mm_list(a);
+  if (k === 'tree' && Array.isArray(a)) { const t = __mm_tree(a); __mm_firstTree = __mm_firstTree || t; return t; }
+  if (k === 'tree' && a !== null && __mm_firstTree) return __mm_find(__mm_firstTree, a);
+  return a;
+});
+let __mm_result = (__ENTRY__)(...__mm_args);
+if (__mm_result === undefined && __mm_args.length && /void/.test(__mm_ret || '')) __mm_result = __mm_args[0];
+else if ((__mm_result === null || __mm_result === undefined) && __mm_kind(__mm_ret)) __mm_result = [];
+console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === undefined ? null : __mm_result)));
+`;
+
+  // JSDoc types for the entry function: LeetCode's JS stubs declare
+  // "@param {ListNode} head" / "@return {TreeNode}" right above it.
+  function jsDocTypes(code, entryName) {
+    const name = entryName.replace(/^new Solution\(\)\./, '');
+    const def = new RegExp(`(?:function\\s+${name}\\s*\\(|(?:var|let|const)\\s+${name}\\s*=|\\b${name}\\s*\\()`).exec(code);
+    if (!def) return { params: [], ret: null };
+    const before = code.slice(0, def.index);
+    const docStart = before.lastIndexOf('/**');
+    const doc = docStart >= 0 && before.slice(docStart).includes('*/') ? before.slice(docStart) : '';
+    const params = [...doc.matchAll(/@param\s*\{([^}]*)\}/g)].map(m => m[1]);
+    const ret = (doc.match(/@returns?\s*\{([^}]*)\}/) || [])[1] || null;
+    return { params, ret };
+  }
+
+  function stripComments(langKey, code) {
+    if (langKey === 'python') return code.replace(/^\s*#.*$/gm, '');
+    return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  }
+
+  function withDriver(langKey, code) {
+    if (langKey === 'python') {
+      const entry = detectPythonEntry(stripComments('python', code));
+      if (!entry) return code;
+      return `${code}\n${PY_DRIVER.replace('__ENTRY__', entry)}`;
     }
     if (langKey === 'javascript') {
-      const entry = detectJsEntry(code);
+      const entry = detectJsEntry(stripComments('javascript', code));
       if (!entry) return code;
-      return `${code}
-
-const __mm_lines = require('fs').readFileSync(0, 'utf8').split(/\\r?\\n/).filter(l => l.trim() !== '');
-const __mm_args = __mm_lines.map(l => JSON.parse(l));
-const __mm_result = ${entry}(...__mm_args);
-console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? null : __mm_result));
-`;
+      const { params, ret } = jsDocTypes(code, entry);
+      return `${code}\n${JS_DRIVER
+        .replace('__ENTRY__', entry.startsWith('new ') ? `(${entry}).bind(new Solution())` : entry)
+        .replace('__PARAM_TYPES__', JSON.stringify(params))
+        .replace('__RETURN_TYPE__', JSON.stringify(ret))}`;
     }
     return code; // cpp/java: no auto-driver, run as written
   }
@@ -1072,7 +1224,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   }
 
   async function runTests() {
-    if (!testCases.length) {
+    // The editor holds the live question's code, so run the live question's
+    // tests even if the interviewer is looking at another question.
+    const cases = role === 'interviewer' ? liveTestCases() : testCases;
+    if (!cases.length) {
       setOutput('Add at least one test case first.');
       return;
     }
@@ -1083,13 +1238,21 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     const code = withPrelude(langKey, withDriver(langKey, rawCode));
     const hasDriver = code !== withPrelude(langKey, rawCode);
     const noAutoDriver = !hasDriver && langKey !== 'python' && langKey !== 'javascript';
+    if (!hasDriver && !noAutoDriver) {
+      // Design problems (MinStack, LRUCache, Trie…) are a class driven by a
+      // sequence of method calls, not one function call per test.
+      setOutput("Couldn't find a function to call: tests run a Solution method or a top-level function with one input per line.\n\nFor design problems (a class like MinStack or LRUCache), add your own calls at the bottom and use Run instead.");
+      runTestsBtn.disabled = false;
+      runTestsBtn.textContent = 'Run tests';
+      return;
+    }
     const summaryLines = [];
     let passCount = 0;
-    testCases.forEach(tc => { delete tc.result; });
-    for (let i = 0; i < testCases.length; i++) {
-      const tc = testCases[i];
-      runTestsBtn.textContent = `Running ${i + 1}/${testCases.length}…`;
-      setOutput(`Running test case ${i + 1} of ${testCases.length}…`);
+    cases.forEach(tc => { delete tc.result; });
+    for (let i = 0; i < cases.length; i++) {
+      const tc = cases[i];
+      runTestsBtn.textContent = `Running ${i + 1}/${cases.length}…`;
+      setOutput(`Running test case ${i + 1} of ${cases.length}…`);
       try {
         const result = await executeCode(lang.judge0, code, tc.input);
         const { printed, result: returned } = hasDriver
@@ -1119,10 +1282,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       }
       renderTestcases();
     }
-    setOutput(`${passCount}/${testCases.length} test cases passed\n\n` + summaryLines.join('\n'));
-    addLogEntry('run', `Ran tests: ${passCount}/${testCases.length} passed`);
+    setOutput(`${passCount}/${cases.length} test cases passed\n\n` + summaryLines.join('\n'));
+    addLogEntry('run', `Ran tests: ${passCount}/${cases.length} passed`);
     if (role === 'interviewer') {
-      questions[activeQ].lastRun = { passed: passCount, total: testCases.length, at: Date.now() };
+      questions[liveQ].lastRun = { passed: passCount, total: cases.length, at: Date.now() };
     }
     replayMark('run');
     runTestsBtn.disabled = false;
@@ -1249,7 +1412,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   function testcasesMsg() {
     return {
       type: 'testcases',
-      value: questionVisible ? testCases.filter(tc => !tc.hidden).map(tc => ({ input: tc.input, expected: tc.expected })) : [],
+      value: questionVisible ? liveTestCases().filter(tc => !tc.hidden).map(tc => ({ input: tc.input, expected: tc.expected })) : [],
       visible: questionVisible,
     };
   }
@@ -1367,23 +1530,28 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   let suppressQuestionEmit = false;
   questionArea.addEventListener('input', () => {
     if (suppressQuestionEmit || role !== 'interviewer') return;
-    if (questionVisible) broadcast({ type: 'question', value: questionArea.value, visible: true });
+    if (questionVisible && isViewingLive()) broadcast({ type: 'question', value: questionArea.value, visible: true });
     saveRoomStateSoon();
   });
 
+  // Visibility always refers to the live question (see the multiple
+  // questions section below).
   function setQuestionVisible(visible) {
     questionVisible = visible;
-    trackQuestionVisibility(visible);
-    revealBtn.textContent = visible ? 'Hide from candidate' : 'Show to candidate';
-    revealBtn.classList.toggle('active', visible);
     if (role === 'interviewer') {
-      broadcast({ type: 'question', value: questionArea.value, visible });
+      trackQuestionVisibility(visible);
+      updateRevealBtn();
+      broadcast({ type: 'question', value: liveQuestionText(), visible });
       syncTestcases();
     }
   }
 
   if (role === 'interviewer') {
     revealBtn.addEventListener('click', () => {
+      if (!isViewingLive()) {
+        moveCandidateTo(activeQ);
+        return;
+      }
       setQuestionVisible(!questionVisible);
       addLogEntry('event', questionVisible ? 'Question shown to candidate' : 'Question hidden from candidate');
       saveRoomStateSoon();
@@ -1421,7 +1589,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         currentMeta = { difficulty: currentMeta.difficulty === value ? '' : value };
         setDifficultyButtonsActive(currentMeta.difficulty);
         renderQuestionBadges(currentMeta);
-        broadcast({ type: 'meta', value: currentMeta });
+        if (isViewingLive()) broadcast({ type: 'meta', value: currentMeta });
+        saveRoomStateSoon();
       });
     });
   }
@@ -1544,13 +1713,14 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       const slug = url && extractLeetCodeSlug(url);
       questions[activeQ].title = slug ? slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
       renderQuestionTabs();
-      if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
+      const live = isViewingLive();
+      if (questionVisible && live) broadcast({ type: 'question', value: composed, visible: true });
 
       if (parsed.difficulty) {
         currentMeta = { difficulty: parsed.difficulty };
         setDifficultyButtonsActive(parsed.difficulty);
         renderQuestionBadges(currentMeta);
-        broadcast({ type: 'meta', value: currentMeta });
+        if (live) broadcast({ type: 'meta', value: currentMeta });
       }
 
       const hadExistingCases = testCases.length > 0;
@@ -1560,8 +1730,15 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         syncTestcases();
       }
 
-      if (parsed.signature && parsed.signature.lang === 'python' && langSelect.value === 'python' && editor.getValue() === DEFAULT_PY_STARTER) {
-        replaceAllCode(parsed.signature.code);
+      if (parsed.signature && parsed.signature.lang === 'python' && langSelect.value === 'python') {
+        // A question being prepared keeps its starter until the candidate
+        // is moved to it; the live one only replaces untouched code.
+        if (!live) {
+          questions[activeQ].code = parsed.signature.code;
+          questions[activeQ].lang = 'python';
+        } else if (editor.getValue() === DEFAULT_PY_STARTER || !editor.getValue().trim()) {
+          replaceAllCode(parsed.signature.code);
+        }
       }
 
       const summary = [];
@@ -1580,16 +1757,23 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
 
     // ---------- Question bank ----------
     const BANK = window.ONSITE_QUESTIONS || [];
-    const bankStarters = new Set(BANK.flatMap(q => Object.values(q.starter || {})));
+    const CURATED = new Map(BANK.map(q => [q.id, q]));
+    const NEETCODE = window.ONSITE_NEETCODE || [];
+    const NC_BY_SLUG = new Map(NEETCODE.flatMap(t => t.problems.map(p => [p.slug, { ...p, topic: t.topic }])));
+    const bankStarters = new Set([
+      ...BANK.flatMap(q => Object.values(q.starter || {})),
+      ...[...NC_BY_SLUG.values()].flatMap(p => Object.values(p.starter || {})),
+    ]);
 
     function applyBankQuestion(q) {
+      const live = isViewingLive();
       questionArea.value = `${q.title}\n\n${q.prompt}`;
-      if (questionVisible) broadcast({ type: 'question', value: questionArea.value, visible: true });
+      if (questionVisible && live) broadcast({ type: 'question', value: questionArea.value, visible: true });
 
       currentMeta = { difficulty: q.difficulty };
       setDifficultyButtonsActive(q.difficulty);
       renderQuestionBadges(currentMeta);
-      broadcast({ type: 'meta', value: currentMeta });
+      if (live) broadcast({ type: 'meta', value: currentMeta });
 
       testCases = q.tests.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
       renderTestcases();
@@ -1600,36 +1784,137 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       renderQuestionTabs();
 
       const starter = q.starter && q.starter[langSelect.value];
-      const current = editor.getValue();
-      const untouched = !current.trim() || current === DEFAULT_PY_STARTER || bankStarters.has(current);
-      if (starter && (untouched || confirm(`Replace the code in the editor with the ${q.title} starter?`))) {
-        replaceAllCode(starter);
+      if (!live) {
+        // Preparing a later question: stash its starter for when the
+        // candidate is moved to it. The editor is untouched.
+        if (starter) {
+          questions[activeQ].code = starter;
+          questions[activeQ].lang = langSelect.value;
+        }
+      } else {
+        const current = editor.getValue();
+        const untouched = !current.trim() || current === DEFAULT_PY_STARTER || bankStarters.has(current);
+        if (starter && (untouched || confirm(`Replace the code in the editor with the ${q.title} starter?`))) {
+          replaceAllCode(starter);
+        }
       }
 
       const hiddenCount = q.tests.filter(t => t.hidden).length;
-      setOutput(`Loaded ${q.title}: ${q.tests.length} test cases (${hiddenCount} hidden), starter code, and a reference approach in Log. The question stays hidden until you click Show to candidate.`);
+      const loaded = [
+        q.tests.length ? `${q.tests.length} test case${q.tests.length === 1 ? '' : 's'}${hiddenCount ? ` (${hiddenCount} hidden)` : ''}` : (q.design ? 'no test cases (design problems are driven by calls you write)' : 'no test cases'),
+        starter ? 'starter code' : `no ${LANGS[langSelect.value].label} starter`,
+        q.solution ? 'a reference approach in Log' : null,
+      ].filter(Boolean);
+      setOutput(`Loaded ${q.title}: ${loaded.join(', ')}. ` +
+        (live ? 'The question stays hidden until you click Show to candidate.' : `The candidate stays on question ${liveQ + 1} until you click Move candidate to this question.`));
       addLogEntry('event', `Question set: ${q.title}`);
       importPanel.classList.add('hidden');
       saveRoomStateSoon();
     }
 
+    // NeetCode 150, grouped by topic. Hand-written questions (questions.js)
+    // are used as-is; everything else has its text and examples fetched
+    // from LeetCode on click, with LeetCode's starter code from the bundled
+    // list. Premium problems use the short statement bundled with them.
+    async function loadBankProblem(slug, rowBtn) {
+      const nc = NC_BY_SLUG.get(slug);
+      const curated = CURATED.get(slug);
+      if (curated) {
+        applyBankQuestion({ ...curated, starter: { ...(nc ? nc.starter : {}), ...curated.starter } });
+        return;
+      }
+      const design = !!nc && !!nc.starter.python && !/class Solution\b/.test(nc.starter.python);
+      const url = `https://leetcode.com/problems/${slug}/`;
+      let prompt;
+      if (nc && nc.prompt) {
+        prompt = nc.prompt;
+      } else {
+        rowBtn.classList.add('loading');
+        rowBtn.setAttribute('aria-busy', 'true');
+        try {
+          const data = await fetchLeetCodeQuestion(slug);
+          if (!data || !data.question) throw new Error('no problem text returned');
+          prompt = htmlToPlainText(data.question);
+        } catch (e) {
+          setOutput(`Couldn't fetch ${nc ? nc.title : slug} from LeetCode (${e.message}). The community API it uses may be waking up — try again in a few seconds, or paste the problem text under From LeetCode.`);
+          return;
+        } finally {
+          rowBtn.classList.remove('loading');
+          rowBtn.removeAttribute('aria-busy');
+        }
+      }
+      const parsed = parseLeetCodePaste(prompt);
+      applyBankQuestion({
+        title: nc ? nc.title : slug,
+        difficulty: nc ? nc.difficulty : parsed.difficulty,
+        prompt: `${prompt}\n\n${url}`,
+        starter: nc ? nc.starter : {},
+        // Design problems' examples are call sequences, not function inputs.
+        tests: design ? [] : parsed.testCases,
+        design,
+        solution: '',
+      });
+    }
+
     const bankList = document.getElementById('bankList');
-    BANK.forEach(q => {
+    const bankSearch = document.getElementById('bankSearch');
+    function bankRow(slug) {
+      const nc = NC_BY_SLUG.get(slug);
+      const curated = CURATED.get(slug);
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'bank-item';
+      b.dataset.search = `${nc ? nc.title : curated.title} ${nc ? nc.num : ''} ${nc ? nc.topic : ''}`.toLowerCase();
       const title = document.createElement('span');
       title.className = 'bank-title';
-      title.textContent = q.title;
+      title.textContent = nc ? nc.title : curated.title;
       const meta = document.createElement('span');
       meta.className = 'bank-meta';
-      meta.textContent = q.topics;
+      meta.textContent = curated ? 'Hidden tests and reference approach' : nc && nc.premium ? 'LeetCode Premium, summary included' : `LeetCode ${nc.num}`;
       const diff = document.createElement('span');
-      diff.className = 'bank-diff difficulty-' + q.difficulty;
-      diff.textContent = q.difficulty;
+      const d = nc ? nc.difficulty : curated.difficulty;
+      diff.className = 'bank-diff difficulty-' + d;
+      diff.textContent = d;
       b.append(title, meta, diff);
-      b.addEventListener('click', () => applyBankQuestion(q));
-      bankList.appendChild(b);
+      b.addEventListener('click', () => loadBankProblem(slug, b));
+      return b;
+    }
+    NEETCODE.forEach((t, i) => {
+      const group = document.createElement('details');
+      group.className = 'bank-group';
+      if (i === 0) group.open = true;
+      const summary = document.createElement('summary');
+      const name = document.createElement('span');
+      name.textContent = t.topic;
+      const count = document.createElement('span');
+      count.className = 'bank-count';
+      count.textContent = String(t.problems.length);
+      summary.append(name, count);
+      const list = document.createElement('div');
+      list.className = 'bank-list';
+      t.problems.forEach(p => list.appendChild(bankRow(p.slug)));
+      group.append(summary, list);
+      bankList.appendChild(group);
+    });
+    const bankEmpty = document.createElement('p');
+    bankEmpty.className = 'import-hint hidden';
+    bankEmpty.textContent = 'No NeetCode 150 problem matches. Paste a LeetCode URL below to use any other problem.';
+    bankList.appendChild(bankEmpty);
+    bankSearch.addEventListener('input', () => {
+      const q = bankSearch.value.trim().toLowerCase();
+      let any = false;
+      bankList.querySelectorAll('.bank-group').forEach(g => {
+        let groupHit = false;
+        g.querySelectorAll('.bank-item').forEach(item => {
+          const hit = !q || item.dataset.search.includes(q);
+          item.classList.toggle('hidden', !hit);
+          groupHit = groupHit || hit;
+        });
+        g.classList.toggle('hidden', !groupHit);
+        if (q) g.open = groupHit;
+        any = any || groupHit;
+      });
+      bankEmpty.classList.toggle('hidden', any);
     });
 
     document.getElementById('importConfirmBtn').addEventListener('click', () => {
@@ -1651,6 +1936,12 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         return;
       }
       const btn = document.getElementById('importFetchBtn');
+      if (NC_BY_SLUG.has(slug) || CURATED.has(slug)) {
+        // Known problem: same path as the bank, which includes starter code.
+        await loadBankProblem(slug, btn);
+        urlInput.value = '';
+        return;
+      }
       const original = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Fetching…';
@@ -1675,16 +1966,35 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   }
 
   // ---------- Multiple questions per interview (interviewer only) ----------
-  // The question pane, test cases, reference notes, and editor always show
-  // the *active* question; each question's copy of them lives in a slot and
-  // is swapped in and out when the interviewer switches. Time is counted
-  // only while a question is shown to the candidate.
+  // Two separate ideas:
+  //  - the LIVE question (liveQ) is what the candidate sees and works on;
+  //    the editor always holds its code.
+  //  - the VIEWED question (activeQ) is what the interviewer's question,
+  //    tests, and reference panes show.
+  // Viewing or preparing another question never touches the editor or the
+  // candidate; "Move candidate to this question" is the only thing that
+  // does. Time is counted only while a question is shown to the candidate.
   const questionTabsEl = document.getElementById('questionTabs');
+  const prepNote = document.getElementById('prepNote');
   function blankQuestionSlot() {
     return { title: '', question: '', meta: { difficulty: '' }, testCases: [], solution: '', code: null, lang: null, visible: false, timeMs: 0, visibleSince: null, lastRun: null };
   }
   let questions = [blankQuestionSlot()];
   let activeQ = 0;
+  let liveQ = 0;
+
+  function isViewingLive() {
+    return role !== 'interviewer' || activeQ === liveQ;
+  }
+  function liveQuestionText() {
+    return isViewingLive() ? questionArea.value : questions[liveQ].question;
+  }
+  function liveMeta() {
+    return isViewingLive() ? currentMeta : questions[liveQ].meta;
+  }
+  function liveTestCases() {
+    return isViewingLive() ? testCases : questions[liveQ].testCases;
+  }
 
   function questionTitle(slot, i) {
     if (slot.title) return slot.title;
@@ -1695,23 +2005,25 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     return slot.timeMs + (slot.visibleSince ? Date.now() - slot.visibleSince : 0);
   }
 
-  // Copy the live panes into the active slot.
+  // Copy the panes into their slots: question/tests/notes belong to the
+  // viewed question, the editor belongs to the live one.
   function snapshotActive() {
-    const slot = questions[activeQ];
-    slot.question = questionArea.value;
-    slot.meta = { ...currentMeta };
-    slot.testCases = testCases.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
-    slot.solution = solutionArea.value;
-    slot.code = editor.getValue();
-    slot.lang = langSelect.value;
-    slot.visible = questionVisible;
+    const viewed = questions[activeQ];
+    viewed.question = questionArea.value;
+    viewed.meta = { ...currentMeta };
+    viewed.testCases = testCases.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
+    viewed.solution = solutionArea.value;
+    const live = questions[liveQ];
+    live.code = editor.getValue();
+    live.lang = langSelect.value;
+    live.visible = questionVisible;
   }
 
   // Called by setQuestionVisible: the clock for a question runs while the
   // candidate can see it.
   function trackQuestionVisibility(visible) {
     if (role !== 'interviewer') return;
-    const slot = questions[activeQ];
+    const slot = questions[liveQ];
     slot.visible = visible;
     if (visible && !slot.visibleSince) slot.visibleSince = Date.now();
     if (!visible && slot.visibleSince) {
@@ -1720,33 +2032,58 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     }
   }
 
-  function loadActiveQuestion() {
+  function updateRevealBtn() {
+    if (role !== 'interviewer') return;
+    const viewingLive = isViewingLive();
+    revealBtn.textContent = !viewingLive ? 'Move candidate to this question' : questionVisible ? 'Hide from candidate' : 'Show to candidate';
+    revealBtn.classList.toggle('active', viewingLive && questionVisible);
+    prepNote.classList.toggle('hidden', viewingLive);
+    if (!viewingLive) {
+      prepNote.textContent = `The candidate is still on question ${liveQ + 1}. Changes here stay private until you move them to this question.`;
+    }
+  }
+
+  // Load the viewed question into the side panes (never the editor).
+  function loadViewedQuestion() {
     const slot = questions[activeQ];
     questionArea.value = slot.question;
     currentMeta = { ...slot.meta };
     setDifficultyButtonsActive(currentMeta.difficulty);
     renderQuestionBadges(currentMeta);
-    broadcast({ type: 'meta', value: currentMeta });
     testCases = slot.testCases.map(tc => ({ ...tc }));
     renderTestcases();
     solutionArea.value = slot.solution;
+    updateRevealBtn();
+  }
+
+  function viewQuestion(i) {
+    if (i === activeQ || !questions[i]) return;
+    snapshotActive();
+    activeQ = i;
+    loadViewedQuestion();
+    renderQuestionTabs();
+    saveRoomStateSoon();
+  }
+
+  // Put the viewed question in front of the candidate: their editor gets
+  // this question's code (its starter, or whatever was written for it
+  // earlier) and the question is shown.
+  function moveCandidateTo(i) {
+    if (i === liveQ || !questions[i]) return;
+    snapshotActive();
+    trackQuestionVisibility(false);
+    questions[liveQ].visible = false;
+    liveQ = i;
+    const slot = questions[i];
     if (slot.lang && slot.lang !== langSelect.value) {
       langSelect.value = slot.lang;
       editor.setOption('mode', LANGS[slot.lang].cmMode);
       broadcast({ type: 'lang', value: slot.lang });
     }
     replaceAllCode(slot.code == null ? '' : slot.code);
-    setQuestionVisible(!!slot.visible);
-  }
-
-  function switchQuestion(i, logText) {
-    if (i === activeQ || !questions[i]) return;
-    snapshotActive();
-    trackQuestionVisibility(false);
-    questions[activeQ].visible = false; // leaving a question hides it from the candidate
-    activeQ = i;
-    loadActiveQuestion();
-    addLogEntry('event', logText || `Switched to question ${i + 1}: ${questionTitle(questions[i], i)}`);
+    broadcast({ type: 'meta', value: currentMeta });
+    setQuestionVisible(true);
+    addLogEntry('event', `Moved candidate to question ${i + 1}: ${questionTitle(slot, i)}`);
     replayMark('question');
     renderQuestionTabs();
     saveRoomStateSoon();
@@ -1754,24 +2091,25 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
 
   function addQuestion() {
     questions.push(blankQuestionSlot());
-    switchQuestion(questions.length - 1, `Added question ${questions.length}`);
+    viewQuestion(questions.length - 1);
+    addLogEntry('event', `Added question ${questions.length}`);
     importPanel.classList.remove('hidden');
   }
 
+  // The live question can't be removed — move the candidate off it first.
   function removeQuestion(i) {
-    if (questions.length < 2) return;
-    if (i === activeQ) snapshotActive();
+    if (questions.length < 2 || i === liveQ) return;
+    snapshotActive();
     const slot = questions[i];
     const hasContent = slot.question.trim() || (slot.code && slot.code.trim()) || slot.testCases.length;
-    if (hasContent && !confirm(`Remove question ${i + 1} (${questionTitle(slot, i)}) and its code from this interview?`)) return;
+    if (hasContent && !confirm(`Remove question ${i + 1} (${questionTitle(slot, i)}) from this interview?`)) return;
+    questions.splice(i, 1);
+    if (i < liveQ) liveQ--;
     if (i === activeQ) {
-      trackQuestionVisibility(false);
-      questions.splice(i, 1);
-      activeQ = Math.min(i, questions.length - 1);
-      loadActiveQuestion();
-    } else {
-      questions.splice(i, 1);
-      if (i < activeQ) activeQ--;
+      activeQ = liveQ;
+      loadViewedQuestion();
+    } else if (i < activeQ) {
+      activeQ--;
     }
     renderQuestionTabs();
     saveRoomStateSoon();
@@ -1788,7 +2126,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     questionTabsEl.innerHTML = '';
     questions.forEach((slot, i) => {
       const tab = document.createElement('div');
-      tab.className = 'q-tab' + (i === activeQ ? ' active' : '');
+      tab.className = 'q-tab' + (i === activeQ ? ' active' : '') + (i === liveQ ? ' is-live' : '');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'q-tab-main';
@@ -1801,6 +2139,13 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       title.className = 'q-tab-title';
       title.textContent = questionTitle(slot, i);
       btn.append(num, title);
+      if (i === liveQ) {
+        const live = document.createElement('span');
+        live.className = 'q-tab-live';
+        live.textContent = 'Candidate';
+        live.title = 'The candidate is working on this question';
+        btn.appendChild(live);
+      }
       const t = questionTimeMs(slot);
       if (t > 0) {
         const time = document.createElement('span');
@@ -1808,9 +2153,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         time.textContent = fmtQuestionTime(t);
         btn.appendChild(time);
       }
-      btn.addEventListener('click', () => switchQuestion(i));
+      btn.addEventListener('click', () => viewQuestion(i));
       tab.appendChild(btn);
-      if (questions.length > 1) {
+      if (questions.length > 1 && i !== liveQ) {
         const x = document.createElement('button');
         x.type = 'button';
         x.className = 'q-tab-remove';
@@ -2254,7 +2599,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       renderTestcases();
       questions = [blankQuestionSlot()];
       activeQ = 0;
+      liveQ = 0;
       renderQuestionTabs();
+      updateRevealBtn();
 
       solutionArea.value = '';
       logEntries = [];
@@ -2352,6 +2699,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     const state = {
       questions,
       activeQ,
+      liveQ,
       v: 1,
       savedAt: Date.now(),
       code: editor.getValue(),
@@ -2416,8 +2764,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     if (Array.isArray(state.questions) && state.questions.length) {
       questions = state.questions;
       activeQ = Math.min(state.activeQ || 0, questions.length - 1);
+      liveQ = Math.min(state.liveQ || 0, questions.length - 1);
     }
     renderQuestionTabs();
+    updateRevealBtn();
     solutionArea.value = state.solution || '';
     logEntries = state.log || [];
     Object.assign(feedbackScores, state.scores || {});
@@ -2436,7 +2786,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     else resetTimerDisplay();
     renderLog();
     if (state.verdict) setVerdict(state.verdict, true);
-    setOutput('Restored this room from your last visit.');
+    if ((state.log && state.log.length) || (state.question || '').trim() || (state.code && state.code !== DEFAULT_PY_STARTER)) {
+      setOutput('Restored this room from your last visit.');
+    }
   }
   window.addEventListener('pagehide', saveRoomState);
 
@@ -2567,8 +2919,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
 
   function sendFullState(conn) {
     conn.send(timerSyncMsg());
-    conn.send({ type: 'question', value: questionArea.value, visible: questionVisible });
-    conn.send({ type: 'meta', value: currentMeta });
+    conn.send({ type: 'question', value: liveQuestionText(), visible: questionVisible });
+    conn.send({ type: 'meta', value: liveMeta() });
     conn.send(testcasesMsg());
     conn.send({ type: 'code', value: editor.getValue() });
     conn.send({ type: 'lang', value: langSelect.value });

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=40" />
+<link rel="stylesheet" href="style.css?v=44" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -211,6 +211,7 @@
               </div>
               <span class="hidden-note hidden" id="candidateHiddenNote">Your interviewer will share the question here.</span>
             </div>
+            <p class="prep-note hidden" id="prepNote" role="status"></p>
             <div class="question-meta" id="questionMeta" role="group" aria-label="Difficulty">
               <button class="difficulty-btn difficulty-easy" data-difficulty="easy" type="button">Easy</button>
               <button class="difficulty-btn difficulty-medium" data-difficulty="medium" type="button">Medium</button>
@@ -221,13 +222,14 @@
 
             <div class="import-panel hidden" id="importPanel">
               <div class="import-section">
-                <p class="import-label">Question bank</p>
-                <p class="import-hint">Loads the problem, starter code, test cases, and a reference approach into your private notes.</p>
-                <div class="bank-list" id="bankList"></div>
+                <p class="import-label">NeetCode 150</p>
+                <p class="import-hint">Loads the problem, its LeetCode starter code, and test cases from its examples. Problems marked "Hidden tests" also add hidden edge cases and a reference approach to your private notes.</p>
+                <input class="bank-search" id="bankSearch" type="search" placeholder="Search by name, number, or topic" autocomplete="off" aria-label="Search the question bank" />
+                <div class="bank-groups" id="bankList"></div>
               </div>
               <div class="import-section">
                 <p class="import-label">From LeetCode</p>
-                <p class="import-hint">Paste a problem URL to pull its description, difficulty, and examples. Premium problems can't be fetched — paste the page text below instead.</p>
+                <p class="import-hint">Paste any problem URL to pull its description, difficulty, and examples. Starter code comes along for NeetCode 150 problems; LeetCode doesn't let a browser fetch it for others. Premium problems can't be fetched — paste the page text instead.</p>
                 <div class="import-fetch-row">
                   <input id="importUrlInput" placeholder="https://leetcode.com/problems/two-sum/" autocomplete="off" />
                   <button class="btn btn-sm btn-primary" id="importFetchBtn" type="button">Fetch</button>
@@ -310,8 +312,9 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/addon/edit/closebrackets.js"></script>
 <script src="vendor/codemirror/addon/selection/active-line.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
-<script src="questions.js?v=30"></script>
-<script src="report.js?v=2"></script>
-<script src="app.js?v=41"></script>
+<script src="questions.js?v=31"></script>
+<script src="neetcode150.js?v=1"></script>
+<script src="report.js?v=3"></script>
+<script src="app.js?v=46"></script>
 </body>
 </html>

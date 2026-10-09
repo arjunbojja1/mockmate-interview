@@ -1,6 +1,8 @@
-// Starter question bank. Every problem here has a single deterministic
-// answer per input (no "return in any order"), so the exact-match test
-// runner can grade it without false FAILs.
+// Hand-written questions with hidden test cases and reference approaches.
+// Ids are LeetCode slugs so they line up with the NeetCode 150 list
+// (neetcode150.js); these override the fetched version of the same problem.
+// Every problem here has a single deterministic answer per input (no
+// "return in any order"), so the exact-match test runner can grade it.
 window.ONSITE_QUESTIONS = [
   {
     id: 'two-sum',
@@ -72,7 +74,7 @@ Time O(n), space O(n).
 Watch for: closer on an empty stack, leftover openers.`,
   },
   {
-    id: 'longest-substring',
+    id: 'longest-substring-without-repeating-characters',
     title: 'Longest Substring Without Repeating Characters',
     difficulty: 'medium',
     topics: 'Sliding window',
@@ -139,7 +141,7 @@ Time O(n log n), space O(n) for output.
 [[1,4],[2,3]] catches using the new end instead of max.`,
   },
   {
-    id: 'product-except-self',
+    id: 'product-of-array-except-self',
     title: 'Product of Array Except Self',
     difficulty: 'medium',
     topics: 'Prefix sums',
