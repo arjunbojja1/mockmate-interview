@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=32" />
+<link rel="stylesheet" href="style.css?v=40" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -90,7 +90,7 @@
           <option value="30">30×</option>
         </select>
       </div>
-      <p class="replay-legend"><span class="mk mk-paste"></span>Paste <span class="mk mk-away"></span>Left the tab <span class="mk mk-run"></span>Code run</p>
+      <p class="replay-legend"><span class="mk mk-paste"></span>Paste <span class="mk mk-away"></span>Left the tab <span class="mk mk-run"></span>Code run <span class="mk mk-question"></span>Switched question</p>
     </div>
   </div>
 
@@ -107,6 +107,27 @@
         <button class="btn btn-sm btn-dark" id="runTestsBtn" type="button">Run tests</button>
         <button class="btn btn-sm btn-dark" id="formatCodeBtn" type="button" title="Format with Ruff (Python) or clang-format (C++/Java/JS) — Cmd/Ctrl+Shift+F">Format</button>
         <div class="toolbar-spacer"></div>
+        <div class="editor-settings">
+          <button class="btn btn-sm btn-dark" id="editorSettingsBtn" type="button" aria-expanded="false" aria-controls="editorSettingsMenu" title="Editor settings">Aa</button>
+          <div class="settings-menu hidden" id="editorSettingsMenu" role="dialog" aria-label="Editor settings">
+            <div class="settings-row">
+              <span id="fontSizeLabel">Text size</span>
+              <div class="stepper" role="group" aria-labelledby="fontSizeLabel">
+                <button type="button" id="fontDownBtn" aria-label="Smaller text">−</button>
+                <output id="fontSizeOut" aria-live="polite">14</output>
+                <button type="button" id="fontUpBtn" aria-label="Larger text">+</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <span id="editorThemeLabel">Editor</span>
+              <div class="seg" role="group" aria-labelledby="editorThemeLabel">
+                <button type="button" data-editor-theme="dark">Dark</button>
+                <button type="button" data-editor-theme="light">Light</button>
+              </div>
+            </div>
+            <p class="settings-note">Only changes your screen.</p>
+          </div>
+        </div>
         <button class="btn btn-sm btn-dark" id="whiteboardToggle" type="button">Whiteboard</button>
       </div>
       <div class="editor-surface" id="editorSurface">
@@ -182,6 +203,7 @@
       <div class="tab-panels">
         <div class="tab-panel active" data-panel="question">
           <div class="question-pane">
+            <div class="question-tabs hidden" id="questionTabs" role="tablist" aria-label="Questions in this interview"></div>
             <div class="side-header-row">
               <div class="question-actions" id="interviewerQuestionActions">
                 <button class="btn btn-sm" id="importLeetcodeBtn" type="button">Choose a question</button>
@@ -255,6 +277,7 @@
             </div>
             <div class="feedback-actions">
               <button class="btn btn-sm" id="replayBtn" type="button">Play back the code</button>
+              <button class="btn btn-sm" id="openReportBtn" type="button">Open report</button>
               <button class="btn btn-sm copy-feedback" id="copyFeedbackBtn" type="button">Copy summary</button>
             </div>
             <button class="btn btn-sm btn-danger-quiet reset-room" id="resetRoomBtn" type="button">Reset for next candidate</button>
@@ -288,6 +311,7 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/addon/selection/active-line.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
 <script src="questions.js?v=30"></script>
-<script src="app.js?v=37"></script>
+<script src="report.js?v=2"></script>
+<script src="app.js?v=41"></script>
 </body>
 </html>

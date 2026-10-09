@@ -16,6 +16,8 @@ Run a coding interview in one browser tab: a shared editor that runs code, a whi
 - **Hidden test cases**: tick *Hidden* on any case and the candidate never sees it.
 - **Question bank** (`questions.js`): eight classic problems, each with starter code, example and hidden test cases, and a reference approach that loads into your private notes.
 - **Interview log**: notes you type are stamped with the interview clock, alongside candidate pastes, tab switches, test runs, and joins.
+- **Multiple questions per interview**: add a warm-up and a main problem as numbered tabs. Each keeps its own question, test cases, notes, and code, and tracks how long it was shown to the candidate.
+- **Interview report**: Scorecard → *Open report* builds a clean, printable page (Save as PDF) with scores, summary, each question's time, test results, and final code, plus the log. Past interviews can reopen it.
 - **Code playback**: replay every edit from the session, with pastes, tab switches, and runs marked on the timeline.
 - **Refresh-safe rooms**: the room's state is saved in your browser, so a refresh or closed tab doesn't lose anything, and a candidate you already admitted reconnects without knocking again.
 
@@ -23,6 +25,7 @@ Run a coding interview in one browser tab: a shared editor that runs code, a whi
 
 - Spaces-only indentation (4 wide): Tab / Shift-Tab indent and dedent, Backspace removes a whole indent level, and pasted code is re-indented to the cursor with any tabs expanded, so mixed tabs and spaces can't cause Python `TabError`s.
 - **Format** (Cmd/Ctrl+Shift+F) runs real formatters in the browser via WebAssembly: [Ruff](https://docs.astral.sh/ruff/formatter/) (Black-compatible) for Python and clang-format for C++/Java/JavaScript. Code that doesn't parse is left untouched and the syntax error is reported.
+- **Editor settings** (the *Aa* button): text size and a light or dark editor. These apply only to your screen.
 - Python runs with LeetCode's usual implicit imports (`typing`, `collections`, `heapq`, `math`, …), and test runs show anything the code `print()`s separately from the returned value.
 
 ## Notes

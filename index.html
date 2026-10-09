@@ -6,7 +6,7 @@
 <title>Onsite — Run coding interviews in the browser</title>
 <meta name="description" content="Share a link, write and run code together, sketch on a whiteboard, and score the candidate privately. No installs, no accounts." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=32" />
+<link rel="stylesheet" href="style.css?v=40" />
 </head>
 <body class="landing">
   <header class="landing-top">
@@ -87,6 +87,7 @@
     <div id="historyList"></div>
   </section>
 
+<script src="report.js?v=2"></script>
 <script>
 window.addEventListener('pageshow', function (e) {
   if (e.persisted) window.location.reload();
@@ -165,7 +166,7 @@ function renderHistory() {
     list.innerHTML = '<p class="history-empty">No interviews yet. Start one, fill in the scorecard, and it shows up here when you leave the room.</p>';
     return;
   }
-  list.innerHTML = entries.map(e => {
+  list.innerHTML = entries.map((e, idx) => {
     const verdictLabel = e.verdict === 'pass' ? 'Pass' : e.verdict === 'fail' ? 'No pass' : '';
     const scores = Object.entries(e.scores || {}).map(([k, v]) => `${escapeHtml(k)} ${v}/4`).join(', ');
     const meta = [new Date(e.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })];
@@ -182,8 +183,12 @@ function renderHistory() {
         ${e.summary ? `<div class="history-entry-summary">${escapeHtml(e.summary)}</div>` : ''}
         ${e.notes && e.notes.length ? `<ul class="history-entry-notes">${e.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
         ${e.questionSnippet ? `<div class="history-entry-question">${escapeHtml(e.questionSnippet)}${e.questionSnippet.length >= 140 ? '…' : ''}</div>` : ''}
+        <button class="btn btn-sm history-report" type="button" data-idx="${idx}">Open report</button>
       </article>`;
   }).join('');
+  list.querySelectorAll('.history-report').forEach(b => {
+    b.addEventListener('click', () => window.OnsiteReport.open(entries[+b.dataset.idx]));
+  });
 }
 
 function route() {

@@ -350,6 +350,53 @@
   }
   formatBtn.addEventListener('click', formatCode);
 
+  // ---------- Editor settings (per viewer, never synced) ----------
+  const settingsBtn = document.getElementById('editorSettingsBtn');
+  const settingsMenu = document.getElementById('editorSettingsMenu');
+  const fontSizeOut = document.getElementById('fontSizeOut');
+  const FONT_MIN = 11;
+  const FONT_MAX = 22;
+  let editorPrefs = { fontSize: 14, theme: 'dark' };
+  try { editorPrefs = { ...editorPrefs, ...JSON.parse(localStorage.getItem('onsite-editor-prefs') || '{}') }; } catch {}
+
+  function applyEditorPrefs() {
+    editorPrefs.fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, +editorPrefs.fontSize || 14));
+    document.documentElement.style.setProperty('--code-size', editorPrefs.fontSize + 'px');
+    document.body.classList.toggle('editor-light', editorPrefs.theme === 'light');
+    fontSizeOut.textContent = String(editorPrefs.fontSize);
+    document.getElementById('fontDownBtn').disabled = editorPrefs.fontSize <= FONT_MIN;
+    document.getElementById('fontUpBtn').disabled = editorPrefs.fontSize >= FONT_MAX;
+    settingsMenu.querySelectorAll('[data-editor-theme]').forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.editorTheme === editorPrefs.theme));
+    });
+    editor.refresh();
+    try { localStorage.setItem('onsite-editor-prefs', JSON.stringify(editorPrefs)); } catch {}
+  }
+
+  function setSettingsOpen(open) {
+    settingsMenu.classList.toggle('hidden', !open);
+    settingsBtn.setAttribute('aria-expanded', String(open));
+    settingsBtn.classList.toggle('active', open);
+  }
+  settingsBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    setSettingsOpen(settingsMenu.classList.contains('hidden'));
+  });
+  settingsMenu.addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => setSettingsOpen(false));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !settingsMenu.classList.contains('hidden')) {
+      setSettingsOpen(false);
+      settingsBtn.focus();
+    }
+  });
+  document.getElementById('fontDownBtn').addEventListener('click', () => { editorPrefs.fontSize--; applyEditorPrefs(); });
+  document.getElementById('fontUpBtn').addEventListener('click', () => { editorPrefs.fontSize++; applyEditorPrefs(); });
+  settingsMenu.querySelectorAll('[data-editor-theme]').forEach(b => {
+    b.addEventListener('click', () => { editorPrefs.theme = b.dataset.editorTheme; applyEditorPrefs(); });
+  });
+  applyEditorPrefs();
+
   // ---------- Remote cursor + selection indicator ----------
   const remoteRoleLabel = role === 'interviewer' ? 'Candidate' : 'Interviewer';
   let remoteName = remoteRoleLabel;
@@ -1074,6 +1121,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     }
     setOutput(`${passCount}/${testCases.length} test cases passed\n\n` + summaryLines.join('\n'));
     addLogEntry('run', `Ran tests: ${passCount}/${testCases.length} passed`);
+    if (role === 'interviewer') {
+      questions[activeQ].lastRun = { passed: passCount, total: testCases.length, at: Date.now() };
+    }
     replayMark('run');
     runTestsBtn.disabled = false;
     runTestsBtn.textContent = 'Run tests';
@@ -1323,6 +1373,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
 
   function setQuestionVisible(visible) {
     questionVisible = visible;
+    trackQuestionVisibility(visible);
     revealBtn.textContent = visible ? 'Hide from candidate' : 'Show to candidate';
     revealBtn.classList.toggle('active', visible);
     if (role === 'interviewer') {
@@ -1490,6 +1541,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     function applyImportedQuestion(parsed, url, sourceLabel) {
       const composed = url ? `Source: ${url}\n\n${parsed.description}` : parsed.description;
       questionArea.value = composed;
+      const slug = url && extractLeetCodeSlug(url);
+      questions[activeQ].title = slug ? slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
+      renderQuestionTabs();
       if (questionVisible) broadcast({ type: 'question', value: composed, visible: true });
 
       if (parsed.difficulty) {
@@ -1542,6 +1596,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       syncTestcases();
 
       solutionArea.value = q.solution || '';
+      questions[activeQ].title = q.title;
+      renderQuestionTabs();
 
       const starter = q.starter && q.starter[langSelect.value];
       const current = editor.getValue();
@@ -1615,6 +1671,169 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         btn.disabled = false;
         btn.textContent = original;
       }
+    });
+  }
+
+  // ---------- Multiple questions per interview (interviewer only) ----------
+  // The question pane, test cases, reference notes, and editor always show
+  // the *active* question; each question's copy of them lives in a slot and
+  // is swapped in and out when the interviewer switches. Time is counted
+  // only while a question is shown to the candidate.
+  const questionTabsEl = document.getElementById('questionTabs');
+  function blankQuestionSlot() {
+    return { title: '', question: '', meta: { difficulty: '' }, testCases: [], solution: '', code: null, lang: null, visible: false, timeMs: 0, visibleSince: null, lastRun: null };
+  }
+  let questions = [blankQuestionSlot()];
+  let activeQ = 0;
+
+  function questionTitle(slot, i) {
+    if (slot.title) return slot.title;
+    const first = (slot.question || '').split('\n').find(l => l.trim() && !/^Source:/.test(l.trim()));
+    return first ? first.trim().slice(0, 48) : `Question ${i + 1}`;
+  }
+  function questionTimeMs(slot) {
+    return slot.timeMs + (slot.visibleSince ? Date.now() - slot.visibleSince : 0);
+  }
+
+  // Copy the live panes into the active slot.
+  function snapshotActive() {
+    const slot = questions[activeQ];
+    slot.question = questionArea.value;
+    slot.meta = { ...currentMeta };
+    slot.testCases = testCases.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
+    slot.solution = solutionArea.value;
+    slot.code = editor.getValue();
+    slot.lang = langSelect.value;
+    slot.visible = questionVisible;
+  }
+
+  // Called by setQuestionVisible: the clock for a question runs while the
+  // candidate can see it.
+  function trackQuestionVisibility(visible) {
+    if (role !== 'interviewer') return;
+    const slot = questions[activeQ];
+    slot.visible = visible;
+    if (visible && !slot.visibleSince) slot.visibleSince = Date.now();
+    if (!visible && slot.visibleSince) {
+      slot.timeMs += Date.now() - slot.visibleSince;
+      slot.visibleSince = null;
+    }
+  }
+
+  function loadActiveQuestion() {
+    const slot = questions[activeQ];
+    questionArea.value = slot.question;
+    currentMeta = { ...slot.meta };
+    setDifficultyButtonsActive(currentMeta.difficulty);
+    renderQuestionBadges(currentMeta);
+    broadcast({ type: 'meta', value: currentMeta });
+    testCases = slot.testCases.map(tc => ({ ...tc }));
+    renderTestcases();
+    solutionArea.value = slot.solution;
+    if (slot.lang && slot.lang !== langSelect.value) {
+      langSelect.value = slot.lang;
+      editor.setOption('mode', LANGS[slot.lang].cmMode);
+      broadcast({ type: 'lang', value: slot.lang });
+    }
+    replaceAllCode(slot.code == null ? '' : slot.code);
+    setQuestionVisible(!!slot.visible);
+  }
+
+  function switchQuestion(i, logText) {
+    if (i === activeQ || !questions[i]) return;
+    snapshotActive();
+    trackQuestionVisibility(false);
+    questions[activeQ].visible = false; // leaving a question hides it from the candidate
+    activeQ = i;
+    loadActiveQuestion();
+    addLogEntry('event', logText || `Switched to question ${i + 1}: ${questionTitle(questions[i], i)}`);
+    replayMark('question');
+    renderQuestionTabs();
+    saveRoomStateSoon();
+  }
+
+  function addQuestion() {
+    questions.push(blankQuestionSlot());
+    switchQuestion(questions.length - 1, `Added question ${questions.length}`);
+    importPanel.classList.remove('hidden');
+  }
+
+  function removeQuestion(i) {
+    if (questions.length < 2) return;
+    if (i === activeQ) snapshotActive();
+    const slot = questions[i];
+    const hasContent = slot.question.trim() || (slot.code && slot.code.trim()) || slot.testCases.length;
+    if (hasContent && !confirm(`Remove question ${i + 1} (${questionTitle(slot, i)}) and its code from this interview?`)) return;
+    if (i === activeQ) {
+      trackQuestionVisibility(false);
+      questions.splice(i, 1);
+      activeQ = Math.min(i, questions.length - 1);
+      loadActiveQuestion();
+    } else {
+      questions.splice(i, 1);
+      if (i < activeQ) activeQ--;
+    }
+    renderQuestionTabs();
+    saveRoomStateSoon();
+  }
+
+  function fmtQuestionTime(ms) {
+    const m = Math.floor(ms / 60000);
+    return m < 1 ? '<1m' : `${m}m`;
+  }
+
+  function renderQuestionTabs() {
+    if (role !== 'interviewer') return;
+    questionTabsEl.classList.remove('hidden');
+    questionTabsEl.innerHTML = '';
+    questions.forEach((slot, i) => {
+      const tab = document.createElement('div');
+      tab.className = 'q-tab' + (i === activeQ ? ' active' : '');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'q-tab-main';
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(i === activeQ));
+      const num = document.createElement('span');
+      num.className = 'q-tab-num';
+      num.textContent = String(i + 1);
+      const title = document.createElement('span');
+      title.className = 'q-tab-title';
+      title.textContent = questionTitle(slot, i);
+      btn.append(num, title);
+      const t = questionTimeMs(slot);
+      if (t > 0) {
+        const time = document.createElement('span');
+        time.className = 'q-tab-time' + (slot.visibleSince ? ' live' : '');
+        time.textContent = fmtQuestionTime(t);
+        btn.appendChild(time);
+      }
+      btn.addEventListener('click', () => switchQuestion(i));
+      tab.appendChild(btn);
+      if (questions.length > 1) {
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'q-tab-remove';
+        x.textContent = '×';
+        x.setAttribute('aria-label', `Remove question ${i + 1}`);
+        x.addEventListener('click', () => removeQuestion(i));
+        tab.appendChild(x);
+      }
+      questionTabsEl.appendChild(tab);
+    });
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'q-tab-add';
+    add.textContent = 'Add question';
+    add.addEventListener('click', addQuestion);
+    questionTabsEl.appendChild(add);
+  }
+
+  if (role === 'interviewer') {
+    renderQuestionTabs();
+    setInterval(() => { if (questions.some(q => q.visibleSince)) renderQuestionTabs(); }, 15000);
+    questionArea.addEventListener('input', () => {
+      if (!questions[activeQ].title) renderQuestionTabs();
     });
   }
 
@@ -1807,7 +2026,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     replayMarkersEl.innerHTML = '';
     // Pastes and tab switches are the markers that matter most, so draw
     // them last (on top), and stack markers that would overlap.
-    const priority = { start: 0, run: 1, away: 2, paste: 3 };
+    const priority = { start: 0, question: 1, run: 2, away: 3, paste: 4 };
     const placed = [];
     replay.marks.slice().sort((a, b) => (priority[a.kind] || 0) - (priority[b.kind] || 0)).forEach(m => {
       const pct = (timeline.toVirtual(m.t) / Math.max(1, timeline.total)) * 100;
@@ -1818,7 +2037,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       dot.className = 'mk mk-' + m.kind;
       dot.style.left = `${pct}%`;
       dot.style.top = `${-row * 10}px`;
-      dot.title = `${{ paste: 'Paste', away: 'Left the tab', run: 'Code run', start: 'Interview started' }[m.kind] || m.kind} at ${interviewClock(m.t)}`;
+      dot.title = `${{ paste: 'Paste', away: 'Left the tab', run: 'Code run', start: 'Interview started', question: 'Switched question' }[m.kind] || m.kind} at ${interviewClock(m.t)}`;
       replayMarkersEl.appendChild(dot);
     });
     replaySeek(0);
@@ -1865,7 +2084,25 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   let currentVerdict = null;
   let candidateDisplayName = '';
 
+  // Questions that have anything in them, with the active one's live state.
+  function questionsForReport() {
+    if (role === 'interviewer') snapshotActive();
+    return questions
+      .map((q, i) => ({
+        title: questionTitle(q, i),
+        difficulty: q.meta.difficulty || null,
+        timeMs: questionTimeMs(q),
+        lastRun: q.lastRun,
+        testsTotal: q.testCases.length,
+        lang: q.lang,
+        code: (q.code || '').slice(0, 20000),
+        empty: !q.question.trim() && !(q.code || '').trim(),
+      }))
+      .filter(q => !q.empty);
+  }
+
   function buildSessionSummary() {
+    const reportQuestions = questionsForReport();
     const lines = [`Onsite interview — room ${room}`, `Date: ${new Date().toLocaleString()}`];
     if (candidateDisplayName) lines.push(`Candidate: ${candidateDisplayName}`);
     if (startTime) {
@@ -1888,14 +2125,13 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
       lines.push('Interview log:');
       logEntries.forEach(e => lines.push(`  ${interviewClock(e.at)}  ${e.text}`));
     }
-    if (questionArea.value.trim()) {
+    reportQuestions.forEach((q, i) => {
       lines.push('');
-      lines.push('Question:');
-      lines.push(questionArea.value.trim());
-    }
-    lines.push('');
-    lines.push(`Final code (${LANGS[langSelect.value].label}):`);
-    lines.push(editor.getValue());
+      const facts = [q.difficulty, q.timeMs ? `${Math.round(q.timeMs / 60000)} min` : null, q.lastRun ? `tests ${q.lastRun.passed}/${q.lastRun.total}` : null].filter(Boolean);
+      lines.push(`Question ${i + 1}: ${q.title}${facts.length ? ` (${facts.join(', ')})` : ''}`);
+      lines.push(`Final code (${LANGS[q.lang] ? LANGS[q.lang].label : 'code'}):`);
+      lines.push(q.code || '(none)');
+    });
     return {
       text: lines.join('\n'),
       record: {
@@ -1907,8 +2143,11 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
         scores: { ...feedbackScores },
         verdict: currentVerdict,
         summary: summary || null,
+        plannedMin: durationMin,
         notes: logEntries.filter(e => e.kind === 'note').map(e => `${interviewClock(e.at)} ${e.text}`),
-        questionSnippet: questionArea.value.trim().slice(0, 140),
+        log: logEntries.map(e => ({ time: interviewClock(e.at), kind: e.kind, text: e.text })),
+        questions: reportQuestions.map(({ empty, ...q }) => q),
+        questionSnippet: reportQuestions.map(q => q.title).join(', ').slice(0, 140),
       },
     };
   }
@@ -1979,6 +2218,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     document.getElementById('failBtn').addEventListener('click', () => setVerdict('fail'));
     document.getElementById('clearVerdictBtn').addEventListener('click', () => setVerdict(null));
 
+    document.getElementById('openReportBtn').addEventListener('click', () => {
+      window.OnsiteReport.open(buildSessionSummary().record);
+    });
+
     document.getElementById('copyFeedbackBtn').addEventListener('click', e => {
       copyText(buildSessionSummary().text, e.currentTarget);
     });
@@ -2009,6 +2252,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
 
       testCases = [];
       renderTestcases();
+      questions = [blankQuestionSlot()];
+      activeQ = 0;
+      renderQuestionTabs();
 
       solutionArea.value = '';
       logEntries = [];
@@ -2102,7 +2348,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
   function saveRoomState() {
     if (role !== 'interviewer' || !roomStateReady) return;
     if (roomStateTimer) { clearTimeout(roomStateTimer); roomStateTimer = null; }
+    snapshotActive();
     const state = {
+      questions,
+      activeQ,
       v: 1,
       savedAt: Date.now(),
       code: editor.getValue(),
@@ -2164,6 +2413,11 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_result === undefined ? n
     renderQuestionBadges(currentMeta);
     testCases = (state.testCases || []).map(tc => ({ ...tc }));
     renderTestcases();
+    if (Array.isArray(state.questions) && state.questions.length) {
+      questions = state.questions;
+      activeQ = Math.min(state.activeQ || 0, questions.length - 1);
+    }
+    renderQuestionTabs();
     solutionArea.value = state.solution || '';
     logEntries = state.log || [];
     Object.assign(feedbackScores, state.scores || {});
