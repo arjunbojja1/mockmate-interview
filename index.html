@@ -23,8 +23,27 @@
         <h1>The coding interview, in one tab.</h1>
         <p class="lede">Share a link, write and run code together, sketch on a whiteboard, and score the candidate privately as you go. No installs, no accounts.</p>
 
+        <fieldset class="type-picker" id="typePicker">
+          <legend>What kind of interview?</legend>
+          <label class="type-option">
+            <input type="radio" name="kind" value="leetcode" />
+            <span class="type-name">LeetCode</span>
+            <span class="type-desc">One function, input/output test cases, the NeetCode 150.</span>
+          </label>
+          <label class="type-option">
+            <input type="radio" name="kind" value="backend" />
+            <span class="type-name">Backend</span>
+            <span class="type-desc">Build a feature in a small multi-file service with a test suite.</span>
+          </label>
+          <label class="type-option">
+            <input type="radio" name="kind" value="debugging" />
+            <span class="type-name">Debugging</span>
+            <span class="type-desc">Find and fix the bugs in a multi-file codebase with failing tests.</span>
+          </label>
+        </fieldset>
+
         <div class="start-block">
-          <button class="btn btn-primary" id="startInterviewBtn" type="button">Start an interview</button>
+          <button class="btn btn-primary" id="startInterviewBtn" type="button" disabled title="Choose a kind of interview first">Start an interview</button>
           <fieldset class="length-picker">
             <legend>Interview length</legend>
             <label><input type="radio" name="length" value="30" />30</label>
@@ -74,7 +93,7 @@
       </div>
       <div class="feature">
         <h2>Questions ready to go</h2>
-        <p>The full NeetCode 150 by topic, with LeetCode starter code and test cases, or pull any other problem from LeetCode.</p>
+        <p>The full NeetCode 150 for LeetCode rounds, plus multi-file backend and debugging projects with real test suites and hidden tests.</p>
       </div>
     </section>
 
@@ -100,9 +119,18 @@ function randomCode(len = 6) {
   return out;
 }
 
-document.getElementById('startInterviewBtn').addEventListener('click', () => {
+// The kind of interview decides the room's interface (single function vs.
+// a multi-file project), so there's no default: it has to be chosen.
+const startBtn = document.getElementById('startInterviewBtn');
+document.querySelectorAll('input[name="kind"]').forEach(r => r.addEventListener('change', () => {
+  startBtn.disabled = false;
+  startBtn.removeAttribute('title');
+}));
+startBtn.addEventListener('click', () => {
+  const kind = document.querySelector('input[name="kind"]:checked');
+  if (!kind) return;
   const length = document.querySelector('input[name="length"]:checked').value;
-  window.location.href = `interview.html?room=${randomCode()}&role=interviewer&duration=${length}`;
+  window.location.href = `interview.html?room=${randomCode()}&role=interviewer&type=${kind.value}&duration=${length}`;
 });
 
 const joinForm = document.getElementById('joinForm');
@@ -170,6 +198,7 @@ function renderHistory() {
     const verdictLabel = e.verdict === 'pass' ? 'Pass' : e.verdict === 'fail' ? 'No pass' : '';
     const scores = Object.entries(e.scores || {}).map(([k, v]) => `${escapeHtml(k)} ${v}/4`).join(', ');
     const meta = [new Date(e.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })];
+    if (e.type) meta.push({ leetcode: 'LeetCode', backend: 'Backend', debugging: 'Debugging' }[e.type] || '');
     if (e.durationMin != null) meta.push(`${e.durationMin} min`);
     if (e.difficulty) meta.push(escapeHtml(e.difficulty));
     return `

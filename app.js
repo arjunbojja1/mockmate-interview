@@ -6,6 +6,24 @@
   // for one before knocking (see the name form near the PeerJS section).
   let myName = (params.get('name') || '').trim() || (role === 'interviewer' ? 'Interviewer' : '');
 
+  // The kind of interview, chosen when it's created. LeetCode rooms use the
+  // single-file editor with input/output test cases; Backend and Debugging
+  // rooms work in a multi-file project (see "Backend practicals" below).
+  // The candidate learns it from the interviewer's hello.
+  const INTERVIEW_TYPES = {
+    leetcode: { label: 'LeetCode', scorecard: ['Problem solving', 'Coding', 'Communication'] },
+    backend: { label: 'Backend', scorecard: ['Design', 'Coding', 'Testing', 'Communication'] },
+    debugging: { label: 'Debugging', scorecard: ['Debugging approach', 'Code reading', 'Testing', 'Communication'] },
+  };
+  const interviewType = INTERVIEW_TYPES[params.get('type')] ? params.get('type') : 'leetcode';
+  const usesProjects = interviewType !== 'leetcode';
+  function showRoomType(type) {
+    const el = document.getElementById('roomType');
+    el.textContent = `${INTERVIEW_TYPES[type].label} interview`;
+    el.classList.remove('hidden');
+  }
+  if (role === 'interviewer') showRoomType(interviewType);
+
   document.getElementById('roomChip').textContent = room;
   if (role === 'candidate') {
     document.getElementById('connText').textContent = 'Not connected yet';
@@ -52,6 +70,10 @@
     cpp: { cmMode: 'text/x-c++src', judge0: 105, label: 'C++' }, // GCC 14
     java: { cmMode: 'text/x-java', judge0: 91, label: 'Java' }, // JDK 17
   };
+
+  // A backend practical (multi-file project) open in the editor, or null.
+  // See the "Backend practicals" section below.
+  let project = null;
 
   // ---------- CodeMirror ----------
   const INDENT = 4;
@@ -138,6 +160,9 @@
   });
   editor.setValue(DEFAULT_PY_STARTER);
   editor.clearHistory();
+  // The single-file buffer. A practical's files are separate docs swapped
+  // into the editor; this one waits underneath until the practical closes.
+  const mainDoc = editor.getDoc();
 
   // Indent guides: a faint vertical rule at each indent level of a line's
   // leading whitespace, so block structure (which *is* the syntax in
@@ -193,18 +218,40 @@
   // document, so the receiver's cursor, scroll position, and undo history
   // stay intact. Each message also carries the full resulting text, so a
   // receiver can tell when both sides typed at once and reconcile (see
-  // applyRemoteCode).
+  // applyRemoteCode). In a practical, messages name the file they edit
+  // (file: null is the single-file buffer).
   let suppressEmit = false;
   let pendingOps = [];
+  let pendingFile = null;
   let opFlushScheduled = false;
+  function currentFileName() {
+    return project ? project.current : null;
+  }
+  function docForFile(file) {
+    if (!file) return mainDoc;
+    const f = project && project.files.find(x => x.name === file);
+    return f ? f.doc : null;
+  }
+  // Hidden files never reach the candidate, and nothing in a practical
+  // does until its question is shown.
+  function fileIsPrivate(file) {
+    if (role !== 'interviewer' || !file || !project) return false;
+    return !questionVisible || project.files.some(f => f.name === file && f.hidden);
+  }
   function flushCodeOps() {
     opFlushScheduled = false;
     if (!pendingOps.length) return;
-    broadcast({ type: 'code-ops', ops: pendingOps, value: editor.getValue() });
+    const doc = docForFile(pendingFile);
+    if (doc && !fileIsPrivate(pendingFile)) {
+      broadcast({ type: 'code-ops', ops: pendingOps, value: doc.getValue(), file: pendingFile });
+    }
     pendingOps = [];
   }
   editor.on('change', (cm, changeObj) => {
-    if (suppressEmit) return;
+    if (suppressEmit || (project && !project.current)) return;
+    const file = currentFileName();
+    if (pendingOps.length && file !== pendingFile) flushCodeOps();
+    pendingFile = file;
     // Plain objects only — PeerJS's binary serializer rejects class
     // instances like CodeMirror's Pos.
     pendingOps.push({
@@ -227,32 +274,44 @@
     }
   });
 
-  function applyRemoteCode(ops, value) {
+  function applyRemoteCode(ops, value, file) {
+    const doc = docForFile(file);
+    if (!doc) return; // a file this side doesn't have (yet)
+    const onScreen = doc === editor.getDoc();
     suppressEmit = true;
     try {
       if (ops) {
-        editor.operation(() => {
-          ops.forEach(op => editor.replaceRange(op.text.join('\n'), op.from, op.to, 'remote'));
-        });
+        const apply = () => ops.forEach(op => doc.replaceRange(op.text.join('\n'), op.from, op.to, 'remote'));
+        if (onScreen) editor.operation(apply); else apply();
       }
-      if (editor.getValue() !== value) {
+      if (doc.getValue() !== value) {
         // Both sides edited at once. The interviewer's copy is the
         // tiebreaker: it keeps its best-effort merge (the peer's ops applied
         // on top of its own edit) and sends that back; the candidate adopts
         // whatever the interviewer sends.
         if (ops && role === 'interviewer') {
-          broadcast({ type: 'code', value: editor.getValue() });
+          broadcast({ type: 'code', value: doc.getValue(), file: file || null });
           return;
         }
-        const cursor = editor.getCursor();
-        const scroll = editor.getScrollInfo();
-        editor.setValue(value);
-        editor.setCursor(clampPos(cursor.line, cursor.ch));
-        editor.scrollTo(scroll.left, scroll.top);
+        setDocValueKeepingView(doc, value);
       }
     } finally {
       suppressEmit = false;
     }
+  }
+
+  function setDocValueKeepingView(doc, value) {
+    if (doc !== editor.getDoc()) {
+      const cursor = doc.getCursor();
+      doc.setValue(value);
+      doc.setCursor(cursor);
+      return;
+    }
+    const cursor = editor.getCursor();
+    const scroll = editor.getScrollInfo();
+    editor.setValue(value);
+    editor.setCursor(clampPos(cursor.line, cursor.ch));
+    editor.scrollTo(scroll.left, scroll.top);
   }
 
   // Replaces the whole buffer as one undoable edit (unlike setValue, which
@@ -313,7 +372,12 @@
   let formatting = false;
   async function formatCode() {
     if (formatting || editor.getOption('readOnly')) return;
-    const lang = langSelect.value;
+    const lang = project ? langForFile(project.current) : langSelect.value;
+    if (!lang) {
+      setOutput('Format works on .py and .js files.');
+      return;
+    }
+    const doc = editor.getDoc();
     const source = editor.getValue();
     if (!source.trim()) return;
     formatting = true;
@@ -346,8 +410,9 @@
       formatBtn.disabled = false;
       formatBtn.textContent = 'Format';
     }
-    // The buffer may have changed (peer typing) while the formatter loaded.
-    if (result !== null && editor.getValue() === source && result !== source) replaceAllCode(result);
+    // The buffer may have changed (peer typing, or a different file opened)
+    // while the formatter loaded.
+    if (result !== null && editor.getDoc() === doc && editor.getValue() === source && result !== source) replaceAllCode(result);
     if (note) setOutput(note);
   }
   formatBtn.addEventListener('click', formatCode);
@@ -448,20 +513,40 @@
     if (remoteSelectionMark) { remoteSelectionMark.clear(); remoteSelectionMark = null; }
   }
 
+  // In a practical each side can have a different file open; the peer's
+  // cursor only shows when both are in the same file.
+  let lastRemoteCursor = null;
+  function sendCursor() {
+    const file = currentFileName();
+    if (fileIsPrivate(file)) {
+      broadcast({ type: 'cursor', away: true });
+      return;
+    }
+    const pos = editor.getCursor();
+    const sel = editor.somethingSelected() ? editor.listSelections()[0] : null;
+    broadcast({
+      type: 'cursor',
+      file,
+      line: pos.line,
+      ch: pos.ch,
+      sel: sel ? { anchorLine: sel.anchor.line, anchorCh: sel.anchor.ch, headLine: sel.head.line, headCh: sel.head.ch } : null,
+    });
+  }
+  function onRemoteCursor(msg) {
+    const movedFile = !lastRemoteCursor || lastRemoteCursor.file !== msg.file || !!lastRemoteCursor.away !== !!msg.away;
+    lastRemoteCursor = msg;
+    if (!msg.away && (msg.file || null) === currentFileName()) showRemoteCursor(msg.line, msg.ch, msg.sel);
+    else clearRemoteCursor();
+    if (movedFile && project) renderFileBar();
+  }
+
   let cursorSendTimer = null;
   editor.on('cursorActivity', () => {
     if (suppressEmit) return;
     if (cursorSendTimer) return;
     cursorSendTimer = setTimeout(() => {
       cursorSendTimer = null;
-      const pos = editor.getCursor();
-      const sel = editor.somethingSelected() ? editor.listSelections()[0] : null;
-      broadcast({
-        type: 'cursor',
-        line: pos.line,
-        ch: pos.ch,
-        sel: sel ? { anchorLine: sel.anchor.line, anchorCh: sel.anchor.ch, headLine: sel.head.line, headCh: sel.head.ch } : null,
-      });
+      sendCursor();
     }, 80);
   });
 
@@ -879,12 +964,15 @@
   // If test cases are defined, "Run" runs against them (calling the
   // function with no case to run against would just print nothing) —
   // "Run tests" stays as the explicit/repeatable way to do the same.
+  // In a practical, the shortcut runs the test suite (the usual loop when
+  // debugging), and Run executes the entry file.
   function runOrTest() {
+    if (project) return projectAction(projectTestFiles().length ? 'tests' : 'run');
     if (role !== 'interviewer') return;
     return liveTestCases().length ? runTests() : runCode();
   }
-  runBtn.addEventListener('click', runOrTest);
-  runTestsBtn.addEventListener('click', runTests);
+  runBtn.addEventListener('click', () => (project ? projectAction('run') : runOrTest()));
+  runTestsBtn.addEventListener('click', () => (project ? projectAction('tests') : runTests()));
   document.getElementById('clearOutputBtn').addEventListener('click', () => { outputPane.textContent = ''; });
 
   if (role !== 'interviewer') {
@@ -1425,6 +1513,473 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     });
   }
 
+  // ---------- Backend practicals (multi-file projects) ----------
+  // A practical is a small codebase with a test suite instead of a single
+  // function: the candidate debugs or extends it. Each file is its own
+  // CodeMirror doc swapped into the editor, so each keeps its own undo
+  // history and the two sides can have different files open. Runs always
+  // happen in the interviewer's browser (OnsiteProjectRunner packs the
+  // files into one Judge0 program), which keeps hidden files private: the
+  // candidate only gets results for files they can see.
+  const Runner = window.OnsiteProjectRunner;
+  const fileBar = document.getElementById('fileBar');
+  const fileTabsEl = document.getElementById('fileTabs');
+  const fileActions = document.getElementById('fileActions');
+  const hideFileBtn = document.getElementById('hideFileBtn');
+  const deleteFileBtn = document.getElementById('deleteFileBtn');
+  const candidateRunsToggle = document.getElementById('candidateRunsToggle');
+  const projectTestsPane = document.getElementById('projectTestsPane');
+  const projectTestsHint = document.getElementById('projectTestsHint');
+  const projectTestsList = document.getElementById('projectTestsList');
+  const outputHead = document.querySelector('.output-head');
+  let candidateTestsShared = false; // candidate: the question's test cases are shown
+  let projectRunning = false;
+  let candidateRunTimer = null;
+  // Set up by the interviewer's question bank (Backend and Debugging rooms).
+  let startBlankProjectRoom = null;
+  let blankProjectForSlot = null;
+
+  function langForFile(name) {
+    if (/\.py$/.test(name)) return 'python';
+    if (/\.[cm]?js$/.test(name)) return 'javascript';
+    return null;
+  }
+  function modeForFile(name) {
+    if (/\.json$/.test(name)) return { name: 'javascript', json: true };
+    const lang = langForFile(name);
+    return lang ? LANGS[lang].cmMode : 'text/plain';
+  }
+
+  function makeProjectFile(f) {
+    const doc = new CodeMirror.Doc(f.content || '', modeForFile(f.name));
+    // Playback records every file's edits, including ones made while the
+    // file isn't on screen.
+    if (role === 'interviewer') doc.on('change', (d, change) => recordReplayChange(f.name, change));
+    return { name: f.name, hidden: !!f.hidden, doc };
+  }
+
+  function projectFiles(includeHidden) {
+    return project.files
+      .filter(f => includeHidden || !f.hidden)
+      .map(f => ({ name: f.name, content: f.doc.getValue(), hidden: f.hidden }));
+  }
+  function projectTestFiles() {
+    return project ? project.files.filter(f => Runner.isTestFile(project.lang, f.name)) : [];
+  }
+  // What a question slot (and the saved room state) keeps for a practical.
+  function projectSnapshot() {
+    return {
+      lang: project.lang,
+      entry: project.entry,
+      candidateRuns: project.candidateRuns,
+      current: project.current,
+      files: projectFiles(true),
+      results: project.results,
+    };
+  }
+
+  // def: { lang, entry, files: [{ name, content, hidden }], candidateRuns, current, results }
+  function openProject(def) {
+    flushCodeOps();
+    clearRemoteCursor();
+    project = {
+      lang: def.lang,
+      entry: def.entry,
+      candidateRuns: def.candidateRuns !== false,
+      files: def.files.map(makeProjectFile),
+      current: null,
+      results: def.results || null,
+      prevLang: project ? project.prevLang : langSelect.value, // the single-file buffer's language
+    };
+    langSelect.value = def.lang;
+    langSelect.disabled = true;
+    if (role === 'interviewer') replay.events.push({ t: Date.now(), project: { files: projectFiles(true) } });
+    const first = project.files.find(f => f.name === def.current) || project.files.find(f => f.name === def.entry) || project.files[0];
+    if (first) showFile(first.name);
+    else editor.swapDoc(new CodeMirror.Doc('', 'text/plain')); // every file is hidden from this side
+    renderFileBar();
+    updateRunButtons();
+    renderProjectTests();
+    broadcastProject();
+  }
+
+  function closeProject() {
+    if (!project) return;
+    flushCodeOps();
+    clearRemoteCursor();
+    langSelect.value = project.prevLang;
+    project = null;
+    editor.swapDoc(mainDoc);
+    langSelect.disabled = false;
+    editor.setOption('mode', LANGS[langSelect.value].cmMode);
+    renderFileBar();
+    updateRunButtons();
+    renderProjectTests();
+    broadcastProject();
+    if (role === 'interviewer') broadcast({ type: 'lang', value: langSelect.value });
+  }
+
+  function showFile(name) {
+    const f = project && project.files.find(x => x.name === name);
+    if (!f) return;
+    flushCodeOps();
+    clearRemoteCursor();
+    project.current = name;
+    if (editor.getDoc() !== f.doc) editor.swapDoc(f.doc);
+    if (lastRemoteCursor && !lastRemoteCursor.away && lastRemoteCursor.file === name) {
+      showRemoteCursor(lastRemoteCursor.line, lastRemoteCursor.ch, lastRemoteCursor.sel);
+    }
+    renderFileBar();
+    sendCursor();
+    saveRoomStateSoon();
+  }
+
+  // The candidate gets the practical, minus hidden files, only while its
+  // question is shown (the same rule as test cases).
+  function projectMsg() {
+    if (!project || !questionVisible) return { type: 'project', value: null };
+    return {
+      type: 'project',
+      value: {
+        lang: project.lang,
+        entry: project.entry,
+        candidateRuns: project.candidateRuns,
+        files: projectFiles(false).map(({ name, content }) => ({ name, content })),
+      },
+    };
+  }
+  function broadcastProject() {
+    if (role === 'interviewer') broadcast(projectMsg());
+  }
+
+  // Candidate: match the interviewer's practical, keeping the docs (and so
+  // the cursor and undo history) of files that are already here.
+  function applyProjectMsg(def) {
+    if (!def) { closeProject(); return; }
+    if (!project || project.lang !== def.lang) { openProject(def); return; }
+    project.entry = def.entry;
+    project.candidateRuns = def.candidateRuns;
+    const existing = new Map(project.files.map(f => [f.name, f]));
+    suppressEmit = true;
+    try {
+      project.files = def.files.map(f => {
+        const have = existing.get(f.name);
+        if (!have) return makeProjectFile(f);
+        if (have.doc.getValue() !== f.content) setDocValueKeepingView(have.doc, f.content);
+        return have;
+      });
+    } finally {
+      suppressEmit = false;
+    }
+    if (!project.files.some(f => f.name === project.current)) {
+      const next = project.files.find(f => f.name === project.entry) || project.files[0];
+      if (next) showFile(next.name);
+    }
+    renderFileBar();
+    updateRunButtons();
+    renderProjectTests();
+  }
+
+  function renderFileBar() {
+    fileBar.classList.toggle('hidden', !project);
+    if (!project) return;
+    fileTabsEl.innerHTML = '';
+    const peerFile = dataConn && lastRemoteCursor && !lastRemoteCursor.away ? lastRemoteCursor.file : null;
+    project.files.forEach(f => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'file-tab' + (f.name === project.current ? ' active' : '') + (f.hidden ? ' is-hidden' : '');
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(f.name === project.current));
+      const label = document.createElement('span');
+      label.textContent = f.name;
+      tab.appendChild(label);
+      if (f.name === project.entry) tab.title = 'Run executes this file';
+      if (f.hidden) {
+        const tag = document.createElement('span');
+        tag.className = 'file-tag';
+        tag.textContent = 'Hidden';
+        tab.title = 'Hidden from the candidate, but part of every run';
+        tab.appendChild(tag);
+      }
+      if (f.name === peerFile) {
+        const dot = document.createElement('span');
+        dot.className = 'file-peer ' + (role === 'interviewer' ? 'is-candidate' : 'is-interviewer');
+        dot.title = `${remoteName} has this file open`;
+        tab.appendChild(dot);
+      }
+      tab.addEventListener('click', () => showFile(f.name));
+      fileTabsEl.appendChild(tab);
+    });
+    if (role === 'interviewer') {
+      fileActions.classList.remove('hidden');
+      const cur = project.files.find(f => f.name === project.current);
+      hideFileBtn.textContent = cur && cur.hidden ? 'Show file' : 'Hide file';
+      hideFileBtn.title = cur && cur.hidden ? 'Send this file to the candidate' : 'Keep this file from the candidate. It still runs with the tests.';
+      deleteFileBtn.disabled = project.files.length < 2;
+      candidateRunsToggle.checked = project.candidateRuns;
+    }
+  }
+
+  if (role === 'interviewer') {
+    document.getElementById('newFileBtn').addEventListener('click', () => {
+      if (!project) return;
+      const name = (prompt('New file name, e.g. utils.py or tests/test_api.py') || '').trim().replace(/^(\.?\/)+/, '');
+      if (!name) return;
+      if (/(^|\/)\.\.(\/|$)|[\\:*?"<>|]|\/$/.test(name)) {
+        alert('Use a relative file name like utils.py or src/helpers.js.');
+        return;
+      }
+      if (!project.files.some(f => f.name === name)) project.files.push(makeProjectFile({ name, content: '' }));
+      showFile(name);
+      renderProjectTests();
+      broadcastProject();
+    });
+    hideFileBtn.addEventListener('click', () => {
+      const f = project && project.files.find(x => x.name === project.current);
+      if (!f) return;
+      f.hidden = !f.hidden;
+      renderFileBar();
+      renderProjectTests();
+      broadcastProject();
+      sendCursor();
+      saveRoomStateSoon();
+    });
+    deleteFileBtn.addEventListener('click', () => {
+      if (!project || project.files.length < 2) return;
+      const name = project.current;
+      if (!confirm(`Delete ${name}?`)) return;
+      project.files = project.files.filter(f => f.name !== name);
+      showFile((project.files.find(f => f.name === project.entry) || project.files[0]).name);
+      renderProjectTests();
+      broadcastProject();
+    });
+    candidateRunsToggle.addEventListener('change', () => {
+      if (!project) return;
+      project.candidateRuns = candidateRunsToggle.checked;
+      updateRunButtons();
+      broadcastProject();
+      saveRoomStateSoon();
+    });
+  }
+
+  // The candidate gets Run / Run tests (and an output pane) in a practical
+  // unless the interviewer turns it off.
+  function updateRunButtons() {
+    const shared = !!project && project.candidateRuns;
+    runBtn.title = project ? `Run ${project.entry}` : 'Run (Cmd/Ctrl+Enter)';
+    runTestsBtn.title = project ? 'Run every test file (Cmd/Ctrl+Enter)' : '';
+    if (role === 'interviewer') {
+      document.getElementById('outputPrivate').textContent = shared ? 'The candidate sees runs, except hidden files' : 'Only you can see this';
+      return;
+    }
+    runBtn.classList.toggle('hidden', !shared);
+    runTestsBtn.classList.toggle('hidden', !shared);
+    outputHead.querySelector('span').textContent = shared ? 'Output' : 'Messages';
+    outputHead.classList.toggle('hidden', !shared);
+    outputPane.classList.toggle('hidden', !shared);
+  }
+
+  function setRunBusy(mode) {
+    runBtn.disabled = !!mode;
+    runTestsBtn.disabled = !!mode;
+    runBtn.textContent = mode === 'run' ? 'Running…' : 'Run';
+    runTestsBtn.textContent = mode === 'tests' ? 'Running…' : 'Run tests';
+  }
+
+  function projectAction(mode) {
+    if (role === 'interviewer') return runProject(mode, 'interviewer');
+    if (!project || !project.candidateRuns || !admitted || runBtn.disabled) return;
+    flushCodeOps(); // the interviewer runs what's on screen here, so send the latest edits first
+    setRunBusy(mode);
+    setOutput(mode === 'run' ? `Running ${project.entry}…` : 'Running the tests…');
+    broadcast({ type: 'run-request', mode });
+    // Don't stay stuck if the answer never comes (dropped connection).
+    clearTimeout(candidateRunTimer);
+    candidateRunTimer = setTimeout(() => {
+      setRunBusy(null);
+      setOutput("No answer from the interviewer's browser. Try again.");
+    }, 45000);
+  }
+
+  const TEST_STATUS_WORDS = { pass: 'PASS', fail: 'FAIL', error: 'ERROR', skip: 'SKIP' };
+  function testRunText(tests, parsed, result, forInterviewer) {
+    const passed = tests.filter(t => t.status === 'pass').length;
+    let head = `${passed}/${tests.length} tests passed`;
+    const hidden = tests.filter(t => t.hidden);
+    if (hidden.length) head += ` (hidden: ${hidden.filter(t => t.status === 'pass').length}/${hidden.length})`;
+    if (result.time) head += ` · ${Math.round(parseFloat(result.time) * 1000)} ms`;
+    const lines = [head];
+    const ok = result.status && result.status.id === 3;
+    if (!parsed.complete) {
+      lines.push(ok ? 'The run stopped before every test finished (did the code exit early?).' : `${result.status.description}: the run stopped before every test finished.`);
+    }
+    lines.push('');
+    tests.forEach(t => lines.push(`${TEST_STATUS_WORDS[t.status] || t.status}  ${t.file} › ${t.name}${t.hidden ? '  [hidden]' : ''}`));
+    const err = Runner.cleanPaths(result.compile_output || result.stderr || '').trim();
+    if (forInterviewer && parsed.printed) lines.push('', 'Printed:', parsed.printed);
+    if (err && (forInterviewer || !tests.length)) lines.push('', err);
+    return lines.join('\n');
+  }
+
+  // Interviewer only. by: 'interviewer' | 'candidate' (a run-request).
+  async function runProject(mode, by) {
+    if (!project) return;
+    const byCandidate = by === 'candidate';
+    if (projectRunning) {
+      if (byCandidate) broadcast({ type: 'run-result', text: 'A run is already in progress. Try again when it finishes.' });
+      return;
+    }
+    const share = project.candidateRuns && questionVisible;
+    const { lang, entry } = project;
+    const files = projectFiles(true);
+    const hiddenFiles = new Set(files.filter(f => f.hidden).map(f => f.name));
+    const testCount = files.filter(f => Runner.isTestFile(lang, f.name)).length;
+    let problem = null;
+    if (mode === 'run' && !files.some(f => f.name === entry)) problem = `There's no ${entry} to run.`;
+    if (mode === 'tests' && !testCount) {
+      problem = lang === 'python'
+        ? 'No test files yet: name them test_*.py or *_test.py.'
+        : 'No test files yet: name them *.test.js, or put them in a test/ folder.';
+    }
+    if (problem) {
+      setOutput(problem);
+      if (byCandidate) broadcast({ type: 'run-result', text: problem });
+      return;
+    }
+    projectRunning = true;
+    setRunBusy(mode);
+    const what = mode === 'run' ? `Running ${entry}…` : `Running ${testCount} test file${testCount === 1 ? '' : 's'}…`;
+    setOutput(byCandidate ? `The candidate clicked ${mode === 'run' ? 'Run' : 'Run tests'}. ${what}` : what);
+    if (share && !byCandidate) broadcast({ type: 'run-status', mode });
+    const who = byCandidate ? 'Candidate ran' : 'Ran';
+    try {
+      const result = await executeCode(LANGS[lang].judge0, Runner.buildProgram(lang, files, mode, entry), '');
+      if (mode === 'run') {
+        const text = formatRunResult({ ...result, stderr: Runner.cleanPaths(result.stderr) });
+        setOutput(text);
+        if (share || byCandidate) broadcast({ type: 'run-result', text });
+        const ok = !result.status || result.status.id === 3;
+        addLogEntry('run', ok ? `${who} ${entry}` : `${who} ${entry}: ${result.status.description}`);
+      } else {
+        const parsed = Runner.parseOutput(result.stdout);
+        const tests = parsed.tests.map(t => ({ ...t, hidden: hiddenFiles.has(t.file) }));
+        const ok = result.status && result.status.id === 3;
+        const status = parsed.complete ? null : ok ? 'stopped early' : result.status.description;
+        const at = Date.now();
+        if (project) {
+          project.results = { at, tests, status };
+          renderProjectTests();
+        }
+        setOutput(testRunText(tests, parsed, result, true));
+        if (share || byCandidate) {
+          const visible = tests.filter(t => !t.hidden);
+          broadcast({ type: 'run-result', text: testRunText(visible, parsed, result, false), results: { at, tests: visible, status } });
+        }
+        const passed = tests.filter(t => t.status === 'pass').length;
+        const hidden = tests.filter(t => t.hidden);
+        questions[liveQ].lastRun = { passed, total: tests.length, at };
+        addLogEntry('run', `${who} the tests: ${passed}/${tests.length} passed` +
+          (hidden.length ? ` (hidden: ${hidden.filter(t => t.status === 'pass').length}/${hidden.length})` : ''));
+      }
+      replayMark('run');
+    } catch (e) {
+      setOutput('Error running code: ' + e.message);
+      if (share || byCandidate) broadcast({ type: 'run-result', text: 'Error running code: ' + e.message });
+    } finally {
+      projectRunning = false;
+      setRunBusy(null);
+      saveRoomStateSoon();
+    }
+  }
+
+  // The Tests tab for a practical: which files are tests, and the last
+  // run's results grouped by file.
+  function renderProjectTests() {
+    const viewingLive = role !== 'interviewer' || isViewingLive();
+    const def = viewingLive ? project : questions[activeQ].project;
+    projectTestsPane.classList.toggle('hidden', !def);
+    testcasePane.classList.toggle('hidden', role === 'interviewer' ? !!def : !!def || !candidateTestsShared);
+    if (!def) return;
+    const files = viewingLive ? def.files.map(f => ({ name: f.name, hidden: f.hidden })) : def.files;
+    const testFiles = files.filter(f => Runner.isTestFile(def.lang, f.name));
+    const naming = def.lang === 'python'
+      ? 'test_*.py files (unittest classes, or plain test_ functions using assert)'
+      : '*.test.js files or a test/ folder (node:test with node:assert)';
+    let hint = testFiles.length
+      ? `Run tests runs ${testFiles.map(f => f.name + (f.hidden ? ' (hidden)' : '')).join(', ')}. Tests are ${naming}.`
+      : `No test files yet. Tests are ${naming}.`;
+    if (testFiles.some(f => f.hidden)) hint += ' Hidden files run every time, but the candidate never sees them or their results.';
+    if (!viewingLive) hint = `These tests run once the candidate is moved to this question. ${hint}`;
+    projectTestsHint.textContent = hint;
+    projectTestsList.innerHTML = '';
+    const results = viewingLive ? def.results : null;
+    if (!results) {
+      if (viewingLive) {
+        const empty = document.createElement('div');
+        empty.className = 'testcase-empty';
+        empty.textContent = 'No test run yet.';
+        projectTestsList.appendChild(empty);
+      }
+      return;
+    }
+    const passed = results.tests.filter(t => t.status === 'pass').length;
+    const summary = document.createElement('p');
+    summary.className = 'ptest-summary ' + (results.tests.length && passed === results.tests.length && !results.status ? 'pass' : 'fail');
+    summary.textContent = `${passed}/${results.tests.length} passed` + (results.status ? ` (${results.status})` : '') + ` · run at ${interviewClock(results.at)}`;
+    projectTestsList.appendChild(summary);
+    const byFile = new Map();
+    results.tests.forEach(t => {
+      if (!byFile.has(t.file)) byFile.set(t.file, []);
+      byFile.get(t.file).push(t);
+    });
+    let expanded = 0;
+    byFile.forEach((tests, file) => {
+      const group = document.createElement('div');
+      group.className = 'ptest-group' + (tests[0].hidden ? ' is-hidden' : '');
+      const head = document.createElement('p');
+      head.className = 'ptest-file';
+      const name = document.createElement('span');
+      name.textContent = file;
+      const count = document.createElement('span');
+      count.className = 'ptest-count';
+      count.textContent = `${tests.filter(t => t.status === 'pass').length}/${tests.length}`;
+      head.append(name);
+      if (tests[0].hidden) {
+        const tag = document.createElement('span');
+        tag.className = 'file-tag';
+        tag.textContent = 'Hidden';
+        head.append(tag);
+      }
+      head.append(count);
+      group.appendChild(head);
+      tests.forEach(t => {
+        const failed = t.status === 'fail' || t.status === 'error';
+        const row = document.createElement(failed && t.message ? 'details' : 'div');
+        row.className = 'ptest-row ' + t.status;
+        const line = document.createElement(failed && t.message ? 'summary' : 'div');
+        line.className = 'ptest-line';
+        const word = document.createElement('span');
+        word.className = 'ptest-status';
+        word.textContent = TEST_STATUS_WORDS[t.status] || t.status;
+        const label = document.createElement('span');
+        label.className = 'ptest-name';
+        label.textContent = t.name;
+        line.append(word, label);
+        row.appendChild(line);
+        if (failed && t.message) {
+          const msg = document.createElement('pre');
+          msg.className = 'ptest-message';
+          msg.textContent = t.message.replace(/\n+$/, '');
+          row.appendChild(msg);
+          if (expanded++ < 3) row.open = true;
+        }
+        group.appendChild(row);
+      });
+      projectTestsList.appendChild(group);
+    });
+  }
+
   // ---------- Timer (counts down from the chosen length; hitting 0 auto-fails) ----------
   const timerEl = document.getElementById('timer');
   const durationSelect = document.getElementById('durationSelect');
@@ -1543,6 +2098,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       updateRevealBtn();
       broadcast({ type: 'question', value: liveQuestionText(), visible });
       syncTestcases();
+      broadcastProject();
     }
   }
 
@@ -1783,6 +2339,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       questions[activeQ].title = q.title;
       renderQuestionTabs();
 
+      if (live) closeProject();
+      questions[activeQ].project = null;
       const starter = q.starter && q.starter[langSelect.value];
       if (!live) {
         // Preparing a later question: stash its starter for when the
@@ -1811,6 +2369,118 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       importPanel.classList.add('hidden');
       saveRoomStateSoon();
     }
+
+    // Backend and Debugging rooms choose from projects of their kind
+    // (projects.js) or start from a blank one; LeetCode rooms from the
+    // NeetCode 150 and LeetCode import.
+    const PROJECTS = (window.ONSITE_PROJECTS || []).filter(p => p.kind === interviewType);
+    const PROJECT_TEMPLATES = window.ONSITE_PROJECT_TEMPLATES || {};
+    importPanel.querySelectorAll('[data-leetcode-only]').forEach(el => el.classList.toggle('hidden', usesProjects));
+    document.getElementById('projectBankSection').classList.toggle('hidden', !usesProjects);
+    if (usesProjects) {
+      document.getElementById('importLeetcodeBtn').textContent = 'Choose a project';
+      document.getElementById('projectBankLabel').textContent = interviewType === 'backend' ? 'Backend projects' : 'Debugging projects';
+      document.getElementById('projectBankHint').textContent = (interviewType === 'backend'
+        ? 'A small service with part of it left to build, and a test suite that checks the spec.'
+        : 'A small codebase with bugs in it, and a test suite that catches them.') +
+        ' Run executes the entry file; Run tests runs every test file. Hidden files are never sent to the candidate but run with every test run, so they work as hidden tests.';
+    }
+
+    // Opened files are compared against this to decide whether replacing
+    // the project needs a confirm.
+    let projectOpenedWith = null;
+    function projectEdited() {
+      if (!project) return false;
+      const files = projectFiles(true);
+      return !projectOpenedWith || files.length !== projectOpenedWith.length ||
+        files.some((f, i) => f.name !== projectOpenedWith[i].name || f.content !== projectOpenedWith[i].content);
+    }
+
+    function applyProjectQuestion(p) {
+      const live = isViewingLive();
+      if (live && projectEdited() && !confirm(`Replace the project in the editor with ${p.title}? Edits to the current files are lost.`)) return;
+      questionArea.value = p.prompt ? `${p.title}\n\n${p.prompt}` : '';
+      if (questionVisible && live) broadcast({ type: 'question', value: questionArea.value, visible: true });
+
+      currentMeta = { difficulty: p.difficulty || '' };
+      setDifficultyButtonsActive(currentMeta.difficulty);
+      renderQuestionBadges(currentMeta);
+      if (live) broadcast({ type: 'meta', value: currentMeta });
+
+      testCases = [];
+      renderTestcases();
+      syncTestcases();
+      solutionArea.value = p.solution || '';
+      questions[activeQ].title = p.prompt ? p.title : '';
+      renderQuestionTabs();
+
+      const def = { lang: p.lang, entry: p.entry, files: p.files.map(f => ({ ...f })), candidateRuns: true, current: p.files[0].name };
+      if (live) {
+        openProject(def);
+        projectOpenedWith = projectFiles(true);
+      } else {
+        questions[activeQ].project = def;
+        renderProjectTests();
+      }
+
+      const hiddenCount = p.files.filter(f => f.hidden).length;
+      const tests = p.files.filter(f => Runner.isTestFile(p.lang, f.name)).length;
+      if (p.prompt) {
+        setOutput(`Loaded ${p.title}: ${p.files.length} files, ${tests} test file${tests === 1 ? '' : 's'}${hiddenCount ? ` (${hiddenCount} hidden)` : ''}, and a reference approach in Log. ` +
+          (live ? 'The candidate sees the project once you click Show to candidate.' : `The candidate stays on question ${liveQ + 1} until you click Move candidate to this question.`));
+        addLogEntry('event', `Question set: ${p.title}`);
+      } else {
+        setOutput(`Started a blank ${LANGS[p.lang].label} project. Add files with New file; tests are files named like ${p.lang === 'python' ? 'test_*.py' : '*.test.js'}.`);
+      }
+      importPanel.classList.add('hidden');
+      saveRoomStateSoon();
+    }
+
+    function blankProject(lang) {
+      const t = PROJECT_TEMPLATES[lang];
+      return { title: `Blank ${LANGS[lang].label} project`, lang, entry: t.entry, files: t.files, prompt: '', solution: '', difficulty: '' };
+    }
+
+    const projectBankList = document.getElementById('projectBankList');
+    PROJECTS.forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'bank-item';
+      const title = document.createElement('span');
+      title.className = 'bank-title';
+      title.textContent = p.title;
+      const meta = document.createElement('span');
+      meta.className = 'bank-meta';
+      const hidden = p.files.filter(f => f.hidden).length;
+      meta.textContent = `${p.topics} · ${p.files.length} files${hidden ? ', hidden tests' : ''}`;
+      const diff = document.createElement('span');
+      diff.className = 'bank-diff difficulty-' + p.difficulty;
+      diff.textContent = p.difficulty;
+      b.append(title, meta, diff);
+      b.addEventListener('click', () => applyProjectQuestion(p));
+      projectBankList.appendChild(b);
+    });
+    projectBankList.classList.toggle('hidden', !PROJECTS.length);
+    importPanel.querySelectorAll('[data-blank-project]').forEach(btn => {
+      btn.addEventListener('click', () => applyProjectQuestion(blankProject(btn.dataset.blankProject)));
+    });
+    document.getElementById('projectBankCancelBtn').addEventListener('click', () => importPanel.classList.add('hidden'));
+
+    // A new Backend or Debugging room starts as a blank Python project with
+    // the project list open, so the room looks like what it is from the start.
+    if (usesProjects) startBlankProjectRoom = () => {
+      suppressEmit = true;
+      mainDoc.setValue('');
+      suppressEmit = false;
+      const def = blankProject('python');
+      openProject({ ...def, files: def.files.map(f => ({ ...f })) });
+      projectOpenedWith = projectFiles(true);
+      importPanel.classList.remove('hidden');
+    };
+    blankProjectForSlot = () => {
+      const def = blankProject('python');
+      return { lang: def.lang, entry: def.entry, files: def.files.map(f => ({ ...f })), candidateRuns: true };
+    };
 
     // NeetCode 150, grouped by topic. Hand-written questions (questions.js)
     // are used as-is; everything else has its text and examples fetched
@@ -1977,7 +2647,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   const questionTabsEl = document.getElementById('questionTabs');
   const prepNote = document.getElementById('prepNote');
   function blankQuestionSlot() {
-    return { title: '', question: '', meta: { difficulty: '' }, testCases: [], solution: '', code: null, lang: null, visible: false, timeMs: 0, visibleSince: null, lastRun: null };
+    return { title: '', question: '', meta: { difficulty: '' }, testCases: [], solution: '', code: null, lang: null, project: null, visible: false, timeMs: 0, visibleSince: null, lastRun: null };
   }
   let questions = [blankQuestionSlot()];
   let activeQ = 0;
@@ -2014,7 +2684,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     viewed.testCases = testCases.map(tc => ({ input: tc.input, expected: tc.expected, hidden: !!tc.hidden }));
     viewed.solution = solutionArea.value;
     const live = questions[liveQ];
-    live.code = editor.getValue();
+    live.project = project ? projectSnapshot() : null;
+    live.code = project ? null : mainDoc.getValue();
     live.lang = langSelect.value;
     live.visible = questionVisible;
   }
@@ -2052,6 +2723,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     renderQuestionBadges(currentMeta);
     testCases = slot.testCases.map(tc => ({ ...tc }));
     renderTestcases();
+    renderProjectTests();
     solutionArea.value = slot.solution;
     updateRevealBtn();
   }
@@ -2075,12 +2747,17 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     questions[liveQ].visible = false;
     liveQ = i;
     const slot = questions[i];
-    if (slot.lang && slot.lang !== langSelect.value) {
-      langSelect.value = slot.lang;
-      editor.setOption('mode', LANGS[slot.lang].cmMode);
-      broadcast({ type: 'lang', value: slot.lang });
+    if (slot.project) {
+      openProject(slot.project);
+    } else {
+      closeProject();
+      if (slot.lang && slot.lang !== langSelect.value) {
+        langSelect.value = slot.lang;
+        editor.setOption('mode', LANGS[slot.lang].cmMode);
+        broadcast({ type: 'lang', value: slot.lang });
+      }
+      replaceAllCode(slot.code == null ? '' : slot.code);
     }
-    replaceAllCode(slot.code == null ? '' : slot.code);
     broadcast({ type: 'meta', value: currentMeta });
     setQuestionVisible(true);
     addLogEntry('event', `Moved candidate to question ${i + 1}: ${questionTitle(slot, i)}`);
@@ -2090,7 +2767,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   }
 
   function addQuestion() {
-    questions.push(blankQuestionSlot());
+    const slot = blankQuestionSlot();
+    if (usesProjects && blankProjectForSlot) slot.project = blankProjectForSlot();
+    questions.push(slot);
     viewQuestion(questions.length - 1);
     addLogEntry('event', `Added question ${questions.length}`);
     importPanel.classList.remove('hidden');
@@ -2101,7 +2780,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (questions.length < 2 || i === liveQ) return;
     snapshotActive();
     const slot = questions[i];
-    const hasContent = slot.question.trim() || (slot.code && slot.code.trim()) || slot.testCases.length;
+    const hasContent = slot.question.trim() || (slot.code && slot.code.trim()) || slot.testCases.length || slot.project;
     if (hasContent && !confirm(`Remove question ${i + 1} (${questionTitle(slot, i)}) from this interview?`)) return;
     questions.splice(i, 1);
     if (i < liveQ) liveQ--;
@@ -2243,31 +2922,62 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   // timestamp, starting from a snapshot of the buffer. Playing them back
   // shows how the solution was built: false starts, rewrites, big pastes.
   const REPLAY_MAX_EVENTS = 15000;
-  let replay = { start: { t: Date.now(), value: editor.getValue() }, events: [], marks: [] };
+  // In a practical, an event names the file it edits (no file: the
+  // single-file buffer), and opening a practical records its files.
+  let replay = { start: { t: Date.now(), value: mainDoc.getValue() }, events: [], marks: [] };
 
   function resetReplay() {
-    replay = { start: { t: Date.now(), value: editor.getValue() }, events: [], marks: [] };
+    replay = {
+      start: { t: Date.now(), value: mainDoc.getValue(), files: project ? projectFiles(true) : null, file: currentFileName() },
+      events: [],
+      marks: [],
+    };
   }
 
   function applyOpsToDoc(doc, ops) {
     ops.forEach(op => doc.replaceRange(op.text.join('\n'), op.from, op.to));
   }
 
-  if (role === 'interviewer') {
-    editor.on('changes', (cm, changes) => {
-      replay.events.push({
-        t: Date.now(),
-        ops: changes.map(c => ({ from: { line: c.from.line, ch: c.from.ch }, to: { line: c.to.line, ch: c.to.ch }, text: c.text.slice() })),
-      });
-      // Keep storage bounded: fold the oldest edits into the snapshot.
-      if (replay.events.length > REPLAY_MAX_EVENTS) {
-        const fold = replay.events.splice(0, 2000);
-        const doc = new CodeMirror.Doc(replay.start.value);
-        fold.forEach(ev => applyOpsToDoc(doc, ev.ops));
-        replay.start = { t: fold[fold.length - 1].t, value: doc.getValue() };
-      }
-      saveRoomStateSoon();
+  // Replay state is a map of file name ('' for the single-file buffer) to doc.
+  function replayDocs(start) {
+    const docs = { '': new CodeMirror.Doc(start.value, LANGS[langSelect.value].cmMode) };
+    (start.files || []).forEach(f => { docs[f.name] = new CodeMirror.Doc(f.content, modeForFile(f.name)); });
+    return docs;
+  }
+  // Applies one event; returns the file it touched.
+  function applyReplayEvent(docs, ev) {
+    if (ev.project) {
+      ev.project.files.forEach(f => { docs[f.name] = new CodeMirror.Doc(f.content, modeForFile(f.name)); });
+      return ev.project.files.length ? ev.project.files[0].name : '';
+    }
+    const key = ev.file || '';
+    if (!docs[key]) docs[key] = new CodeMirror.Doc('', modeForFile(key));
+    applyOpsToDoc(docs[key], ev.ops);
+    return key;
+  }
+
+  function recordReplayChange(file, c) {
+    replay.events.push({
+      t: Date.now(),
+      file: file || undefined,
+      ops: [{ from: { line: c.from.line, ch: c.from.ch }, to: { line: c.to.line, ch: c.to.ch }, text: c.text.slice() }],
     });
+    // Keep storage bounded: fold the oldest edits into the snapshot.
+    if (replay.events.length > REPLAY_MAX_EVENTS) {
+      const fold = replay.events.splice(0, 2000);
+      const docs = replayDocs(replay.start);
+      let last = replay.start.file || '';
+      fold.forEach(ev => { last = applyReplayEvent(docs, ev); });
+      const files = Object.keys(docs).filter(k => k).map(name => ({ name, content: docs[name].getValue() }));
+      replay.start = { t: fold[fold.length - 1].t, value: docs[''].getValue(), files, file: last };
+    }
+    saveRoomStateSoon();
+  }
+
+  if (role === 'interviewer') {
+    // Every edit to the single-file buffer, from either side; practical
+    // files are recorded the same way (see makeProjectFile).
+    mainDoc.on('change', (d, c) => recordReplayChange(null, c));
   }
 
   function replayMark(kind, at) {
@@ -2313,17 +3023,20 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     let target = 0;
     while (target < st.timeline.points.length && st.timeline.points[target] <= pos) target++;
     if (target < st.idx) {
-      replayViewer.setValue(replay.start.value);
+      st.docs = replayDocs(replay.start);
+      st.file = replay.start.file || '';
       st.idx = 0;
     }
     let lastOp = null;
-    replayViewer.operation(() => {
-      for (; st.idx < target; st.idx++) {
-        const ops = replay.events[st.idx].ops;
-        applyOpsToDoc(replayViewer, ops);
-        lastOp = ops[ops.length - 1];
-      }
-    });
+    for (; st.idx < target; st.idx++) {
+      const ev = replay.events[st.idx];
+      st.file = applyReplayEvent(st.docs, ev);
+      lastOp = ev.ops ? ev.ops[ev.ops.length - 1] : null;
+    }
+    // Show whichever file the latest edit was in.
+    if (!st.docs[st.file]) st.file = '';
+    if (replayViewer.getDoc() !== st.docs[st.file]) replayViewer.swapDoc(st.docs[st.file]);
+    document.getElementById('replayFile').textContent = st.file ? `· ${st.file}` : '';
     if (lastOp) {
       const end = CodeMirror.changeEnd({ from: lastOp.from, to: lastOp.to, text: lastOp.text });
       replayViewer.setCursor(end);
@@ -2363,10 +3076,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
         theme: 'onsite', lineNumbers: true, readOnly: true, tabSize: INDENT, indentUnit: INDENT,
       });
     }
-    replayViewer.setOption('mode', LANGS[langSelect.value].cmMode);
-    replayViewer.setValue(replay.start.value);
     const timeline = buildTimeline();
-    replayState = { timeline, idx: 0, pos: 0, playing: false, raf: 0, last: 0 };
+    replayState = { timeline, idx: 0, pos: 0, playing: false, raf: 0, last: 0, docs: replayDocs(replay.start), file: replay.start.file || '' };
     replaySlider.max = String(Math.max(1, Math.round(timeline.total)));
     replayMarkersEl.innerHTML = '';
     // Pastes and tab switches are the markers that matter most, so draw
@@ -2423,7 +3134,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   const feedbackScoresEl = document.getElementById('feedbackScores');
   const feedbackSummary = document.getElementById('feedbackSummary');
   const verdictBadge = document.getElementById('verdictBadge');
-  const FEEDBACK_CATEGORIES = ['Problem solving', 'Coding', 'Communication'];
+  const FEEDBACK_CATEGORIES = INTERVIEW_TYPES[interviewType].scorecard;
   const SCORE_LABELS = { 1: 'Weak', 2: 'Mixed', 3: 'Solid', 4: 'Strong' };
   const feedbackScores = {};
   let currentVerdict = null;
@@ -2439,16 +3150,21 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
         timeMs: questionTimeMs(q),
         lastRun: q.lastRun,
         testsTotal: q.testCases.length,
-        lang: q.lang,
-        code: (q.code || '').slice(0, 20000),
-        empty: !q.question.trim() && !(q.code || '').trim(),
+        lang: q.project ? q.project.lang : q.lang,
+        code: (q.project ? projectReportCode(q.project) : q.code || '').slice(0, 40000),
+        empty: !q.question.trim() && !(q.code || '').trim() && !q.project,
       }))
       .filter(q => !q.empty);
   }
 
+  function projectReportCode(p) {
+    const mark = p.lang === 'python' ? '#' : '//';
+    return p.files.map(f => `${mark} ===== ${f.name}${f.hidden ? ' (hidden from the candidate)' : ''} =====\n${f.content.replace(/\n*$/, '')}\n`).join('\n');
+  }
+
   function buildSessionSummary() {
     const reportQuestions = questionsForReport();
-    const lines = [`Onsite interview — room ${room}`, `Date: ${new Date().toLocaleString()}`];
+    const lines = [`Onsite ${INTERVIEW_TYPES[interviewType].label} interview — room ${room}`, `Date: ${new Date().toLocaleString()}`];
     if (candidateDisplayName) lines.push(`Candidate: ${candidateDisplayName}`);
     if (startTime) {
       const mins = Math.round((Date.now() - startTime) / 60000);
@@ -2482,6 +3198,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       record: {
         date: new Date().toISOString(),
         room,
+        type: interviewType,
         candidateName: candidateDisplayName || null,
         durationMin: startTime ? Math.round((Date.now() - startTime) / 60000) : null,
         difficulty: currentMeta.difficulty || null,
@@ -2597,6 +3314,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
 
       testCases = [];
       renderTestcases();
+      closeProject();
       questions = [blankQuestionSlot()];
       activeQ = 0;
       liveQ = 0;
@@ -2623,6 +3341,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       resetTimerDisplay();
       broadcast(timerSyncMsg());
       resetReplay();
+      if (startBlankProjectRoom) startBlankProjectRoom();
       clearRoomState();
       setConnStatus('Waiting for your candidate', 'waiting');
     }
@@ -2702,7 +3421,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       liveQ,
       v: 1,
       savedAt: Date.now(),
-      code: editor.getValue(),
+      type: interviewType,
+      code: mainDoc.getValue(),
+      project: project ? projectSnapshot() : null,
       lang: langSelect.value,
       question: questionArea.value,
       questionVisible,
@@ -2733,8 +3454,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     try { localStorage.removeItem(ROOM_STATE_KEY); } catch {}
   }
 
+  // Returns whether there was a saved room to restore.
   function restoreRoomState() {
-    if (role !== 'interviewer') return;
+    if (role !== 'interviewer') return false;
     let state = null;
     try {
       // Prune other rooms' state that's gone stale.
@@ -2746,7 +3468,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       }
       state = JSON.parse(localStorage.getItem(ROOM_STATE_KEY) || 'null');
     } catch {}
-    if (!state || state.v !== 1 || Date.now() - state.savedAt > ROOM_STATE_TTL) return;
+    if (!state || state.v !== 1 || Date.now() - state.savedAt > ROOM_STATE_TTL) return false;
 
     suppressEmit = true;
     langSelect.value = LANGS[state.lang] ? state.lang : 'python';
@@ -2766,6 +3488,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       activeQ = Math.min(state.activeQ || 0, questions.length - 1);
       liveQ = Math.min(state.liveQ || 0, questions.length - 1);
     }
+    if (state.project) openProject(state.project); // before the replay is restored, so this isn't recorded in it
     renderQuestionTabs();
     updateRevealBtn();
     solutionArea.value = state.solution || '';
@@ -2786,9 +3509,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     else resetTimerDisplay();
     renderLog();
     if (state.verdict) setVerdict(state.verdict, true);
-    if ((state.log && state.log.length) || (state.question || '').trim() || (state.code && state.code !== DEFAULT_PY_STARTER)) {
+    if ((state.log && state.log.length) || (state.question || '').trim() || (state.code && state.code !== DEFAULT_PY_STARTER) || state.project) {
       setOutput('Restored this room from your last visit.');
     }
+    return true;
   }
   window.addEventListener('pagehide', saveRoomState);
 
@@ -2911,7 +3635,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
 
   // Restore after everything above exists (it calls broadcast(), which
   // is a no-op until a candidate is admitted).
-  restoreRoomState();
+  if (!restoreRoomState() && role === 'interviewer' && startBlankProjectRoom) startBlankProjectRoom();
   roomStateReady = true;
 
   const admitBanner = document.getElementById('admitBanner');
@@ -2922,8 +3646,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     conn.send({ type: 'question', value: liveQuestionText(), visible: questionVisible });
     conn.send({ type: 'meta', value: liveMeta() });
     conn.send(testcasesMsg());
-    conn.send({ type: 'code', value: editor.getValue() });
-    conn.send({ type: 'lang', value: langSelect.value });
+    conn.send({ type: 'code', value: mainDoc.getValue(), file: null });
+    conn.send({ type: 'lang', value: project ? project.prevLang : langSelect.value });
+    conn.send(projectMsg());
     conn.send({ type: 'verdict', value: currentVerdict });
     conn.send({ type: 'mode', value: mode });
     conn.send({ type: 'wb-sync', objects: wbObjects });
@@ -2943,7 +3668,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       admitBanner.classList.add('hidden');
       dataConn = conn;
       conn.send({ type: 'admitted' });
-      conn.send({ type: 'hello', name: myName, role });
+      conn.send({ type: 'hello', name: myName, role, kind: interviewType });
       sendFullState(conn);
       setConnStatus(`${candidateDisplayName || 'Candidate'} is here`, 'connected');
       updateEndAccessVisibility();
@@ -3071,19 +3796,49 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
         break;
       case 'hello':
         remoteName = `${msg.name} (${msg.role})`;
+        if (role === 'candidate' && INTERVIEW_TYPES[msg.kind]) showRoomType(msg.kind);
         break;
       case 'cursor':
-        showRemoteCursor(msg.line, msg.ch, msg.sel);
+        onRemoteCursor(msg);
         break;
       case 'code':
-        applyRemoteCode(null, msg.value);
+        applyRemoteCode(null, msg.value, msg.file);
         break;
       case 'code-ops':
-        applyRemoteCode(msg.ops, msg.value);
+        applyRemoteCode(msg.ops, msg.value, msg.file);
         break;
       case 'lang':
+        // While a practical is open, this is the single-file buffer's
+        // language, for when the practical closes.
+        if (project) { project.prevLang = msg.value; break; }
         langSelect.value = msg.value;
         editor.setOption('mode', LANGS[msg.value].cmMode);
+        break;
+      case 'project':
+        if (role === 'candidate') applyProjectMsg(msg.value);
+        break;
+      case 'run-request':
+        if (role !== 'interviewer') break;
+        if (!project || !project.candidateRuns || !questionVisible) {
+          broadcast({ type: 'run-result', text: "Running code isn't turned on for you right now." });
+        } else {
+          runProject(msg.mode === 'run' ? 'run' : 'tests', 'candidate');
+        }
+        break;
+      case 'run-status':
+        if (role !== 'candidate') break;
+        setRunBusy(msg.mode);
+        setOutput(msg.mode === 'run' ? 'Your interviewer is running the code…' : 'Your interviewer is running the tests…');
+        break;
+      case 'run-result':
+        if (role !== 'candidate') break;
+        clearTimeout(candidateRunTimer);
+        setRunBusy(null);
+        setOutput(msg.text);
+        if (msg.results && project) {
+          project.results = msg.results;
+          renderProjectTests();
+        }
         break;
       case 'timer-sync':
         if (role === 'candidate') {
@@ -3108,7 +3863,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       case 'testcases':
         testCases = (msg.value || []).map(tc => ({ input: tc.input, expected: tc.expected }));
         renderTestcases();
-        if (role === 'candidate') testcasePane.classList.toggle('hidden', !msg.visible);
+        if (role === 'candidate') {
+          candidateTestsShared = !!msg.visible;
+          testcasePane.classList.toggle('hidden', !msg.visible || !!project);
+        }
         break;
       case 'meta':
         currentMeta = msg.value || { difficulty: '' };

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=44" />
+<link rel="stylesheet" href="style.css?v=45" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -19,6 +19,7 @@
         <span class="room-code-label">Room</span>
         <span class="room-code-chip" id="roomChip">------</span>
       </button>
+      <span class="room-type hidden" id="roomType"></span>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connText">Waiting for your candidate</span></span>
     </div>
     <div class="topbar-right">
@@ -73,7 +74,7 @@
   <div class="replay-overlay hidden" id="replayOverlay" role="dialog" aria-modal="true" aria-labelledby="replayTitle">
     <div class="replay-box">
       <div class="replay-head">
-        <h2 id="replayTitle">Code playback</h2>
+        <h2 id="replayTitle">Code playback <span class="replay-file" id="replayFile"></span></h2>
         <button class="btn btn-sm btn-ghost" id="replayClose" type="button">Close</button>
       </div>
       <div class="replay-editor"><textarea id="replayArea"></textarea></div>
@@ -129,6 +130,17 @@
           </div>
         </div>
         <button class="btn btn-sm btn-dark" id="whiteboardToggle" type="button">Whiteboard</button>
+      </div>
+      <div class="file-bar hidden" id="fileBar">
+        <div class="file-tabs" id="fileTabs" role="tablist" aria-label="Project files"></div>
+        <div class="file-actions hidden" id="fileActions">
+          <button class="btn btn-xs btn-dark" id="newFileBtn" type="button">New file</button>
+          <button class="btn btn-xs btn-dark" id="hideFileBtn" type="button">Hide file</button>
+          <button class="btn btn-xs btn-dark" id="deleteFileBtn" type="button">Delete</button>
+          <label class="file-run-toggle" title="Lets the candidate use Run and Run tests. Results for hidden files stay private.">
+            <input type="checkbox" id="candidateRunsToggle" checked />Candidate can run
+          </label>
+        </div>
       </div>
       <div class="editor-surface" id="editorSurface">
         <textarea id="codeArea"></textarea>
@@ -221,13 +233,23 @@
             <textarea id="questionArea" placeholder="Write or paste the problem, constraints, and examples — or choose one from the question bank."></textarea>
 
             <div class="import-panel hidden" id="importPanel">
-              <div class="import-section">
+              <div class="import-section hidden" id="projectBankSection">
+                <p class="import-label" id="projectBankLabel">Projects</p>
+                <p class="import-hint" id="projectBankHint"></p>
+                <div class="bank-list" id="projectBankList"></div>
+                <div class="project-blank-row">
+                  <button class="btn btn-sm" type="button" data-blank-project="python">Blank Python project</button>
+                  <button class="btn btn-sm" type="button" data-blank-project="javascript">Blank JavaScript project</button>
+                  <button class="btn btn-sm btn-ghost" type="button" id="projectBankCancelBtn">Cancel</button>
+                </div>
+              </div>
+              <div class="import-section" data-leetcode-only>
                 <p class="import-label">NeetCode 150</p>
                 <p class="import-hint">Loads the problem, its LeetCode starter code, and test cases from its examples. Problems marked "Hidden tests" also add hidden edge cases and a reference approach to your private notes.</p>
                 <input class="bank-search" id="bankSearch" type="search" placeholder="Search by name, number, or topic" autocomplete="off" aria-label="Search the question bank" />
                 <div class="bank-groups" id="bankList"></div>
               </div>
-              <div class="import-section">
+              <div class="import-section" data-leetcode-only>
                 <p class="import-label">From LeetCode</p>
                 <p class="import-hint">Paste any problem URL to pull its description, difficulty, and examples. Starter code comes along for NeetCode 150 problems; LeetCode doesn't let a browser fetch it for others. Premium problems can't be fetched — paste the page text instead.</p>
                 <div class="import-fetch-row">
@@ -251,6 +273,10 @@
               <button class="btn btn-sm" id="addTestcaseBtn" type="button">Add case</button>
             </div>
             <div id="testcaseList"></div>
+          </div>
+          <div class="project-tests hidden" id="projectTestsPane">
+            <p class="testcase-hint" id="projectTestsHint"></p>
+            <div id="projectTestsList"></div>
           </div>
         </div>
 
@@ -314,7 +340,9 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/peerjs/peerjs.min.js"></script>
 <script src="questions.js?v=31"></script>
 <script src="neetcode150.js?v=1"></script>
+<script src="projects.js?v=1"></script>
+<script src="project-runner.js?v=1"></script>
 <script src="report.js?v=3"></script>
-<script src="app.js?v=46"></script>
+<script src="app.js?v=47"></script>
 </body>
 </html>
