@@ -3962,6 +3962,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
 
   peer.on('open', () => {
     peerOpen = true;
+    roomTakenElsewhere = false;
     if (role === 'candidate') {
       candidateReady();
     } else {
@@ -3973,7 +3974,16 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     wireDataConn(conn);
   });
 
+  // Interviewer: another tab or browser already holds this room. Keep that
+  // message up instead of a tight reconnect loop that hides the reason. A
+  // tab that held the room before can retry slowly; one that never got it
+  // is destroyed by PeerJS and needs a refresh.
+  let roomTakenElsewhere = false;
   peer.on('disconnected', () => {
+    if (roomTakenElsewhere) {
+      setTimeout(() => { if (peer.disconnected && !peer.destroyed) peer.reconnect(); }, 5000);
+      return;
+    }
     setConnStatus('Lost the connection to the server. Reconnecting…', 'waiting');
     peer.reconnect();
   });
@@ -3991,7 +4001,8 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
       setConnStatus("Can't reach the connection server. Check your internet connection.", 'error');
     } else if (err.type === 'unavailable-id') {
-      setConnStatus('This room is already open in another tab or browser. Close it there, or start a new interview.', 'error');
+      roomTakenElsewhere = true;
+      setConnStatus('This room is open in another tab or browser. Close it there, then refresh this tab.', 'error');
     }
   });
 
