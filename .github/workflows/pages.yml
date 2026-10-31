@@ -1,0 +1,54 @@
+# Publishes the site to GitHub Pages, filling in the TURN relay credentials
+# from the repo's TURN_USERNAME / TURN_PASSWORD secrets. Pages must be set to
+# deploy from "GitHub Actions" (Settings → Pages → Source).
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fill in the TURN relay credentials
+        env:
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_PASSWORD: ${{ secrets.TURN_PASSWORD }}
+        run: |
+          if [ -z "$TURN_USERNAME" ] || [ -z "$TURN_PASSWORD" ]; then
+            echo "::warning::TURN_USERNAME or TURN_PASSWORD is empty, so rooms will connect without a relay."
+          fi
+          python3 - <<'EOF'
+          import json, os
+          path = "app.js"
+          s = open(path).read()
+          for placeholder, name in (("'__TURN_USER__'", "TURN_USERNAME"), ("'__TURN_PASS__'", "TURN_PASSWORD")):
+              assert s.count(placeholder) == 1, f"expected one {placeholder} in {path}"
+              s = s.replace(placeholder, json.dumps(os.environ.get(name, "")))
+          open(path, "w").write(s)
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

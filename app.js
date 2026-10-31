@@ -3597,13 +3597,28 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   }
 
   // Public STUN-only ICE often fails to establish a path across two different
-  // networks (symmetric NAT, campus/corporate firewalls). Add a TURN relay as
-  // a fallback so the data channel can still connect in those cases.
+  // networks (symmetric NAT, campus/corporate firewalls). A TURN relay is the
+  // fallback that lets the data channel connect anyway (the old shared
+  // "openrelayproject" credentials stopped issuing relay candidates).
+  // The Metered credentials are filled in at deploy time from the repo's
+  // TURN_USERNAME / TURN_PASSWORD secrets (.github/workflows/pages.yml).
+  // They still ship in the published app.js, since the browser needs them;
+  // the secrets only keep them out of the source. With the placeholders
+  // left in (running locally), rooms connect without a relay. TCP and TLS
+  // on 443 get through firewalls that block UDP.
+  const TURN_USER = '__TURN_USER__';
+  const TURN_PASS = '__TURN_PASS__';
+  const hasTurn = !!TURN_USER && !!TURN_PASS && !TURN_USER.startsWith('__TURN');
+  const turn = urls => ({ urls, username: TURN_USER, credential: TURN_PASS });
   const iceServers = [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    ...(hasTurn ? [
+      turn('turn:global.relay.metered.ca:80'),
+      turn('turn:global.relay.metered.ca:80?transport=tcp'),
+      turn('turn:global.relay.metered.ca:443'),
+      turn('turns:global.relay.metered.ca:443?transport=tcp'),
+    ] : []),
   ];
 
   const peerId = role === 'interviewer' ? `onsite-${room}` : `onsite-${room}-${Math.random().toString(36).slice(2, 8)}`;
