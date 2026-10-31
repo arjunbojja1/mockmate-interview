@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=46" />
+<link rel="stylesheet" href="style.css?v=47" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -124,6 +124,13 @@
               <div class="seg" role="group" aria-labelledby="editorThemeLabel">
                 <button type="button" data-editor-theme="dark">Dark</button>
                 <button type="button" data-editor-theme="light">Light</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <span id="autocompleteLabel">Autocomplete</span>
+              <div class="seg" role="group" aria-labelledby="autocompleteLabel">
+                <button type="button" data-autocomplete="on">On</button>
+                <button type="button" data-autocomplete="off">Off</button>
               </div>
             </div>
             <p class="settings-note">Only changes your screen.</p>
@@ -337,12 +344,13 @@ window.addEventListener('pageshow', function (e) {
 <script src="vendor/codemirror/addon/edit/matchbrackets.js"></script>
 <script src="vendor/codemirror/addon/edit/closebrackets.js"></script>
 <script src="vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="vendor/codemirror/addon/hint/show-hint.js"></script>
 <script src="vendor/peerjs/peerjs.min.js"></script>
 <script src="questions.js?v=31"></script>
 <script src="neetcode150.js?v=1"></script>
 <script src="projects.js?v=1"></script>
 <script src="project-runner.js?v=1"></script>
 <script src="report.js?v=3"></script>
-<script src="app.js?v=50"></script>
+<script src="app.js?v=51"></script>
 </body>
 </html>

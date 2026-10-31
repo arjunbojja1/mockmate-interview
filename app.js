@@ -423,7 +423,7 @@
   const fontSizeOut = document.getElementById('fontSizeOut');
   const FONT_MIN = 11;
   const FONT_MAX = 22;
-  let editorPrefs = { fontSize: 14, theme: 'dark' };
+  let editorPrefs = { fontSize: 14, theme: 'dark', autocomplete: true };
   try { editorPrefs = { ...editorPrefs, ...JSON.parse(localStorage.getItem('onsite-editor-prefs') || '{}') }; } catch {}
 
   function applyEditorPrefs() {
@@ -436,6 +436,10 @@
     settingsMenu.querySelectorAll('[data-editor-theme]').forEach(b => {
       b.setAttribute('aria-pressed', String(b.dataset.editorTheme === editorPrefs.theme));
     });
+    settingsMenu.querySelectorAll('[data-autocomplete]').forEach(b => {
+      b.setAttribute('aria-pressed', String((b.dataset.autocomplete === 'on') === !!editorPrefs.autocomplete));
+    });
+    if (!editorPrefs.autocomplete && editor.state.completionActive) editor.closeHint();
     editor.refresh();
     try { localStorage.setItem('onsite-editor-prefs', JSON.stringify(editorPrefs)); } catch {}
   }
@@ -462,7 +466,202 @@
   settingsMenu.querySelectorAll('[data-editor-theme]').forEach(b => {
     b.addEventListener('click', () => { editorPrefs.theme = b.dataset.editorTheme; applyEditorPrefs(); });
   });
+  settingsMenu.querySelectorAll('[data-autocomplete]').forEach(b => {
+    b.addEventListener('click', () => { editorPrefs.autocomplete = b.dataset.autocomplete === 'on'; applyEditorPrefs(); });
+  });
   applyEditorPrefs();
+
+  // ---------- Autocomplete ----------
+  // VS Code-style suggestions as you type, without a language server:
+  // keywords and builtins for the language, names defined or used anywhere
+  // in the code (every file of a practical), and members after a dot (the
+  // real members of common modules, otherwise names seen after a dot in the
+  // code). Tab or Enter accepts, Esc closes, Ctrl+Space opens it by hand.
+  const words = s => s.trim().split(/\s+/);
+  const PY_SEQ = 'append extend insert pop remove index count sort reverse copy clear';
+  const COMPLETIONS = {
+    python: {
+      keywords: words('False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case self'),
+      builtins: words(`abs all any bin bool bytes callable chr dict dir divmod enumerate filter float format frozenset getattr hasattr hash hex id input int isinstance issubclass iter len list map max min next object oct open ord pow print range repr reversed round set setattr slice sorted str sum super tuple type zip
+        Exception ValueError KeyError TypeError IndexError RuntimeError NotImplementedError StopIteration AssertionError ZeroDivisionError
+        List Dict Set Tuple Optional Union Any deque defaultdict Counter OrderedDict heapq math bisect itertools functools collections inf ListNode TreeNode`),
+      methods: words(`${PY_SEQ} get items keys values setdefault update popitem add discard union intersection difference issubset
+        split rsplit join strip lstrip rstrip lower upper startswith endswith replace find rfind format isdigit isalpha isalnum isspace zfill appendleft popleft rotate most_common`),
+      members: {
+        math: words('sqrt isqrt floor ceil inf nan pi e log log2 log10 exp pow gcd lcm comb perm factorial fabs fsum hypot isclose prod dist'),
+        heapq: words('heappush heappop heapify heappushpop heapreplace nlargest nsmallest merge'),
+        collections: words('deque defaultdict Counter OrderedDict namedtuple ChainMap'),
+        itertools: words('permutations combinations combinations_with_replacement product accumulate chain groupby count cycle repeat islice zip_longest pairwise starmap takewhile dropwhile'),
+        functools: words('lru_cache cache reduce partial cmp_to_key wraps total_ordering'),
+        bisect: words('bisect_left bisect_right bisect insort insort_left insort_right'),
+        re: words('match fullmatch search findall finditer sub subn split compile escape IGNORECASE MULTILINE'),
+        json: words('loads dumps load dump JSONDecodeError'),
+        os: words('path makedirs listdir getcwd environ remove rename walk mkdir'),
+        'os.path': words('join exists isfile isdir dirname basename abspath splitext getsize'),
+        string: words('ascii_lowercase ascii_uppercase ascii_letters digits punctuation whitespace'),
+        random: words('random randint randrange choice choices shuffle sample seed uniform'),
+        time: words('time sleep monotonic perf_counter'),
+        threading: words('Thread Lock RLock Event Semaphore Condition current_thread'),
+        csv: words('reader writer DictReader DictWriter'),
+        sys: words('argv exit stdin stdout stderr maxsize setrecursionlimit path'),
+        unittest: words('TestCase main mock skip expectedFailure'),
+      },
+    },
+    javascript: {
+      keywords: words('async await break case catch class const continue debugger default delete do else export extends false finally for function if import in instanceof let new null of return super switch this throw true try typeof undefined var void while yield'),
+      builtins: words('console Math JSON Object Array String Number Boolean Map Set WeakMap Promise Symbol Date Error TypeError RangeError BigInt parseInt parseFloat isNaN Infinity NaN require module exports setTimeout clearTimeout setInterval clearInterval structuredClone ListNode TreeNode'),
+      methods: words(`length push pop shift unshift slice splice map filter reduce reduceRight forEach find findIndex findLast includes indexOf lastIndexOf join sort reverse concat some every flat flatMap fill at keys values entries
+        has get set add delete clear size then catch finally split trim trimStart trimEnd toLowerCase toUpperCase startsWith endsWith replace replaceAll charAt charCodeAt padStart padEnd repeat substring toString toFixed`),
+      members: {
+        console: words('log error warn info table dir time timeEnd'),
+        Math: words('max min floor ceil abs sqrt cbrt pow round random trunc sign log log2 log10 exp hypot PI E'),
+        JSON: words('stringify parse'),
+        Object: words('keys values entries assign freeze fromEntries create defineProperty getPrototypeOf hasOwn'),
+        Array: words('from isArray of'),
+        Number: words('isInteger isFinite isNaN isSafeInteger parseInt parseFloat MAX_SAFE_INTEGER MIN_SAFE_INTEGER EPSILON MAX_VALUE'),
+        String: words('fromCharCode fromCodePoint raw'),
+        Promise: words('all allSettled any race resolve reject'),
+        assert: words('ok equal strictEqual deepStrictEqual notStrictEqual notDeepStrictEqual throws rejects doesNotThrow match fail'),
+      },
+    },
+    cpp: {
+      keywords: words('auto bool break case catch char class const constexpr continue default delete do double else enum explicit false float for friend if inline int long namespace new nullptr operator private protected public return short signed sizeof static struct switch template this throw true try typedef typename unsigned using virtual void while'),
+      builtins: words('std vector string map unordered_map set unordered_set pair queue stack deque priority_queue sort reverse min max swap abs make_pair begin end cout cin endl INT_MAX INT_MIN LLONG_MAX size_t'),
+      methods: words('push_back pop_back emplace_back size empty begin end front back insert erase find count clear top push pop first second substr length at resize reserve'),
+      members: {},
+    },
+    java: {
+      keywords: words('abstract boolean break byte case catch char class continue default do double else enum extends final finally float for if implements import instanceof int interface long new null package private protected public return short static super switch this throw throws true false try void while var'),
+      builtins: words('String Integer Long Double Boolean Character Math System List ArrayList LinkedList Map HashMap TreeMap Set HashSet TreeSet Queue Deque ArrayDeque PriorityQueue Arrays Collections StringBuilder Object'),
+      methods: words('add get set put remove size isEmpty contains containsKey getOrDefault keySet values entrySet poll offer peek push pop length charAt substring equals append toString sort'),
+      members: {
+        Math: words('max min abs pow sqrt floor ceil round random'),
+        System: words('out in err currentTimeMillis arraycopy'),
+        'System.out': words('println print printf'),
+        Arrays: words('sort fill asList stream copyOf copyOfRange toString'),
+        Collections: words('sort reverse max min unmodifiableList emptyList'),
+        Integer: words('MAX_VALUE MIN_VALUE parseInt valueOf toString'),
+      },
+    },
+  };
+  const DEFINITIONS = {
+    python: [[/^\s*(?:async\s+)?def\s+(\w+)/gm, 'function'], [/^\s*class\s+(\w+)/gm, 'class'], [/^\s*(\w+)\s*(?::[^=\n]*)?=(?!=)/gm, 'variable'], [/^\s*import\s+(\w+)/gm, 'module'], [/^\s*from\s+\S+\s+import\s+(\w+)/gm, 'variable']],
+    javascript: [[/function\s*\*?\s+([\w$]+)/g, 'function'], [/class\s+([\w$]+)/g, 'class'], [/(?:const|let|var)\s+([\w$]+)/g, 'variable'], [/^\s*(?:async\s+)?([\w$]+)\s*\([^)]*\)\s*\{/gm, 'function']],
+    cpp: [[/\b(?:class|struct)\s+(\w+)/g, 'class']],
+    java: [[/\b(?:class|interface|enum)\s+(\w+)/g, 'class']],
+  };
+  const KIND_RANK = { member: 0, function: 0, class: 0, variable: 0, module: 0, method: 1, keyword: 1, word: 2, builtin: 2 };
+
+  function completionLang() {
+    return project ? langForFile(project.current || '') : langSelect.value;
+  }
+  // All the code of the language being edited: the buffer, or every file
+  // of a practical in that language.
+  function completionCode(lang) {
+    if (!project) return editor.getValue();
+    return project.files.filter(f => langForFile(f.name) === lang).map(f => f.doc.getValue()).join('\n');
+  }
+
+  // 0: exact-case prefix, 1: prefix, 2: in-order letters, -1: no match.
+  function matchScore(name, q) {
+    if (!q) return 0;
+    if (name.startsWith(q)) return 0;
+    const n = name.toLowerCase();
+    const lq = q.toLowerCase();
+    if (n.startsWith(lq)) return 1;
+    if (n[0] !== lq[0]) return -1;
+    let i = 0;
+    for (const ch of n) if (ch === lq[i]) i++;
+    return i === lq.length ? 2 : -1;
+  }
+
+  function renderHint(el, self, item) {
+    const name = document.createElement('span');
+    name.className = 'hint-name';
+    name.textContent = item.text;
+    el.appendChild(name);
+    if (item.kind !== 'word') {
+      const kind = document.createElement('span');
+      kind.className = 'hint-kind';
+      kind.textContent = item.kind;
+      el.appendChild(kind);
+    }
+  }
+
+  function onsiteHint(cm) {
+    const lang = completionLang();
+    const data = COMPLETIONS[lang];
+    if (!data) return null;
+    const cur = cm.getCursor();
+    const line = cm.getLine(cur.line);
+    let start = cur.ch;
+    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
+    const query = line.slice(start, cur.ch);
+    if (/^\d/.test(query)) return null;
+    const code = completionCode(lang);
+    const found = new Map(); // name -> kind; the first source to name it wins
+    const add = (name, kind) => { if (!found.has(name)) found.set(name, kind); };
+
+    if (line[start - 1] === '.') {
+      const owner = (line.slice(0, start - 1).match(/([\w$]+(?:\.[\w$]+)*)$/) || [])[1] || '';
+      const known = data.members[owner];
+      if (known) known.forEach(n => add(n, 'member'));
+      else {
+        if (owner === 'self' || owner === 'this') {
+          for (const m of code.matchAll(lang === 'python' ? /def\s+(\w+)\s*\(\s*self/g : /^\s*(?:async\s+)?([\w$]+)\s*\([^)]*\)\s*\{/gm)) add(m[1], 'method');
+        }
+        for (const m of code.matchAll(/\.([A-Za-z_$][\w$]*)/g)) add(m[1], 'member');
+        data.methods.forEach(n => add(n, 'method'));
+      }
+    } else {
+      (DEFINITIONS[lang] || []).forEach(([re, kind]) => {
+        for (const m of code.matchAll(re)) if (!data.keywords.includes(m[1])) add(m[1], kind);
+      });
+      data.keywords.forEach(n => add(n, 'keyword'));
+      data.builtins.forEach(n => add(n, 'builtin'));
+      Object.keys(data.members).forEach(n => { if (!n.includes('.')) add(n, 'module'); });
+      // Every other name in the code, the way VS Code falls back to words.
+      const counts = new Map();
+      for (const m of code.matchAll(/[A-Za-z_$][\w$]*/g)) counts.set(m[0], (counts.get(m[0]) || 0) + 1);
+      // The word being typed is in the code once already; don't offer it back.
+      counts.forEach((n, w) => { if (w.length > 1 && !(w === query && n === 1)) add(w, 'word'); });
+    }
+
+    const list = [];
+    found.forEach((kind, name) => {
+      if (name === query) return;
+      const score = matchScore(name, query);
+      if (score >= 0) list.push({ text: name, kind, score, render: renderHint });
+    });
+    if (!list.length) return null;
+    list.sort((a, b) => a.score - b.score || KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.text.length - b.text.length || a.text.localeCompare(b.text));
+    return { list: list.slice(0, 40), from: CodeMirror.Pos(cur.line, start), to: CodeMirror.Pos(cur.line, cur.ch) };
+  }
+
+  const HINT_OPTIONS = { hint: onsiteHint, completeSingle: false, alignWithWord: true, closeOnUnfocus: true };
+  function showCompletions(cm) {
+    if (cm.getOption('readOnly') || mode === 'draw') return;
+    cm.showHint(HINT_OPTIONS);
+  }
+  editor.setOption('extraKeys', { ...editor.getOption('extraKeys'), 'Ctrl-Space': showCompletions });
+  // Open as you type a name (from its second letter) or right after a dot;
+  // not in comments or strings, and never for the peer's edits.
+  editor.on('inputRead', (cm, change) => {
+    if (!editorPrefs.autocomplete || cm.state.completionActive || change.origin !== '+input') return;
+    const typed = change.text[change.text.length - 1];
+    const ch = typed.slice(-1);
+    if (!/[\w$.]/.test(ch)) return;
+    const cur = cm.getCursor();
+    const token = cm.getTokenAt(cur);
+    if (token.type && /comment|string/.test(token.type)) return;
+    const before = cm.getLine(cur.line).slice(0, cur.ch);
+    if (ch === '.') {
+      if (!/[\w$)\]]\.$/.test(before) || /\d\.$/.test(before)) return;
+    } else if (!/(^|[^\w$])[A-Za-z_$][\w$]+$/.test(before)) {
+      return;
+    }
+    showCompletions(cm);
+  });
 
   // ---------- Remote cursor + selection indicator ----------
   const remoteRoleLabel = role === 'interviewer' ? 'Candidate' : 'Interviewer';
