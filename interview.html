@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=45" />
+<link rel="stylesheet" href="style.css?v=46" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -134,11 +134,11 @@
       <div class="file-bar hidden" id="fileBar">
         <div class="file-tabs" id="fileTabs" role="tablist" aria-label="Project files"></div>
         <div class="file-actions hidden" id="fileActions">
-          <button class="btn btn-xs btn-dark" id="newFileBtn" type="button">New file</button>
-          <button class="btn btn-xs btn-dark" id="hideFileBtn" type="button">Hide file</button>
-          <button class="btn btn-xs btn-dark" id="deleteFileBtn" type="button">Delete</button>
+          <button class="file-action" id="newFileBtn" type="button">New file</button>
+          <button class="file-action" id="hideFileBtn" type="button">Hide</button>
+          <button class="file-action" id="deleteFileBtn" type="button">Delete</button>
           <label class="file-run-toggle" title="Lets the candidate use Run and Run tests. Results for hidden files stay private.">
-            <input type="checkbox" id="candidateRunsToggle" checked />Candidate can run
+            <input type="checkbox" id="candidateRunsToggle" checked />Candidate runs
           </label>
         </div>
       </div>
@@ -343,6 +343,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="projects.js?v=1"></script>
 <script src="project-runner.js?v=1"></script>
 <script src="report.js?v=3"></script>
-<script src="app.js?v=47"></script>
+<script src="app.js?v=48"></script>
 </body>
 </html>

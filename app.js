@@ -1695,13 +1695,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       label.textContent = f.name;
       tab.appendChild(label);
       if (f.name === project.entry) tab.title = 'Run executes this file';
-      if (f.hidden) {
-        const tag = document.createElement('span');
-        tag.className = 'file-tag';
-        tag.textContent = 'Hidden';
-        tab.title = 'Hidden from the candidate, but part of every run';
-        tab.appendChild(tag);
-      }
+      if (f.hidden) tab.title = 'Hidden from the candidate, but part of every run';
       if (f.name === peerFile) {
         const dot = document.createElement('span');
         dot.className = 'file-peer ' + (role === 'interviewer' ? 'is-candidate' : 'is-interviewer');
@@ -1714,7 +1708,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (role === 'interviewer') {
       fileActions.classList.remove('hidden');
       const cur = project.files.find(f => f.name === project.current);
-      hideFileBtn.textContent = cur && cur.hidden ? 'Show file' : 'Hide file';
+      hideFileBtn.textContent = cur && cur.hidden ? 'Show' : 'Hide';
       hideFileBtn.title = cur && cur.hidden ? 'Send this file to the candidate' : 'Keep this file from the candidate. It still runs with the tests.';
       deleteFileBtn.disabled = project.files.length < 2;
       candidateRunsToggle.checked = project.candidateRuns;
@@ -1815,7 +1809,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       lines.push(ok ? 'The run stopped before every test finished (did the code exit early?).' : `${result.status.description}: the run stopped before every test finished.`);
     }
     lines.push('');
-    tests.forEach(t => lines.push(`${TEST_STATUS_WORDS[t.status] || t.status}  ${t.file} › ${t.name}${t.hidden ? '  [hidden]' : ''}`));
+    tests.forEach(t => lines.push(`${(TEST_STATUS_WORDS[t.status] || t.status).padEnd(5)}  ${t.file} › ${t.name}${t.hidden ? '  [hidden]' : ''}`));
     const err = Runner.cleanPaths(result.compile_output || result.stderr || '').trim();
     if (forInterviewer && parsed.printed) lines.push('', 'Printed:', parsed.printed);
     if (err && (forInterviewer || !tests.length)) lines.push('', err);
@@ -1906,11 +1900,12 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     const naming = def.lang === 'python'
       ? 'test_*.py files (unittest classes, or plain test_ functions using assert)'
       : '*.test.js files or a test/ folder (node:test with node:assert)';
-    let hint = testFiles.length
-      ? `Run tests runs ${testFiles.map(f => f.name + (f.hidden ? ' (hidden)' : '')).join(', ')}. Tests are ${naming}.`
-      : `No test files yet. Tests are ${naming}.`;
-    if (testFiles.some(f => f.hidden)) hint += ' Hidden files run every time, but the candidate never sees them or their results.';
-    if (!viewingLive) hint = `These tests run once the candidate is moved to this question. ${hint}`;
+    const hiddenCount = testFiles.filter(f => f.hidden).length;
+    let hint = !testFiles.length
+      ? `No test files yet. Tests are ${naming}.`
+      : `${testFiles.length} test file${testFiles.length === 1 ? '' : 's'}` +
+        (hiddenCount ? `, ${hiddenCount} hidden. Hidden results stay with you.` : '.');
+    if (!viewingLive) hint = `Runs once the candidate is on this question. ${hint}`;
     projectTestsHint.textContent = hint;
     projectTestsList.innerHTML = '';
     const results = viewingLive ? def.results : null;
@@ -1918,7 +1913,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       if (viewingLive) {
         const empty = document.createElement('div');
         empty.className = 'testcase-empty';
-        empty.textContent = 'No test run yet.';
+        empty.textContent = 'No test run yet';
         projectTestsList.appendChild(empty);
       }
       return;
@@ -1948,7 +1943,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       if (tests[0].hidden) {
         const tag = document.createElement('span');
         tag.className = 'file-tag';
-        tag.textContent = 'Hidden';
+        tag.textContent = 'hidden';
         head.append(tag);
       }
       head.append(count);
@@ -2380,10 +2375,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (usesProjects) {
       document.getElementById('importLeetcodeBtn').textContent = 'Choose a project';
       document.getElementById('projectBankLabel').textContent = interviewType === 'backend' ? 'Backend projects' : 'Debugging projects';
-      document.getElementById('projectBankHint').textContent = (interviewType === 'backend'
-        ? 'A small service with part of it left to build, and a test suite that checks the spec.'
-        : 'A small codebase with bugs in it, and a test suite that catches them.') +
-        ' Run executes the entry file; Run tests runs every test file. Hidden files are never sent to the candidate but run with every test run, so they work as hidden tests.';
+      document.getElementById('projectBankHint').textContent = interviewType === 'backend'
+        ? 'A small service with part of it left to build, and tests that check the spec. Hidden test files run too but never reach the candidate.'
+        : 'A small codebase with bugs in it, and tests that catch them. Hidden test files run too but never reach the candidate.';
     }
 
     // Opened files are compared against this to decide whether replacing
