@@ -423,7 +423,7 @@
   const fontSizeOut = document.getElementById('fontSizeOut');
   const FONT_MIN = 11;
   const FONT_MAX = 22;
-  let editorPrefs = { fontSize: 14, theme: 'dark', autocomplete: true };
+  let editorPrefs = { fontSize: 14, theme: 'dark', autocomplete: true, languageServer: true };
   try { editorPrefs = { ...editorPrefs, ...JSON.parse(localStorage.getItem('onsite-editor-prefs') || '{}') }; } catch {}
 
   function applyEditorPrefs() {
@@ -438,6 +438,9 @@
     });
     settingsMenu.querySelectorAll('[data-autocomplete]').forEach(b => {
       b.setAttribute('aria-pressed', String((b.dataset.autocomplete === 'on') === !!editorPrefs.autocomplete));
+    });
+    settingsMenu.querySelectorAll('[data-language-server]').forEach(b => {
+      b.setAttribute('aria-pressed', String((b.dataset.languageServer === 'on') === !!editorPrefs.languageServer));
     });
     if (!editorPrefs.autocomplete && editor.state.completionActive) editor.closeHint();
     editor.refresh();
@@ -468,6 +471,9 @@
   });
   settingsMenu.querySelectorAll('[data-autocomplete]').forEach(b => {
     b.addEventListener('click', () => { editorPrefs.autocomplete = b.dataset.autocomplete === 'on'; applyEditorPrefs(); });
+  });
+  settingsMenu.querySelectorAll('[data-language-server]').forEach(b => {
+    b.addEventListener('click', () => { editorPrefs.languageServer = b.dataset.languageServer === 'on'; applyEditorPrefs(); });
   });
   applyEditorPrefs();
 
@@ -588,7 +594,45 @@
     }
   }
 
-  function onsiteHint(cm) {
+  // Suggestions from the language server once it's running (real members
+  // of the object before the dot, names in scope), topped up with the word
+  // list below; just the word list until then.
+  const SERVER_KINDS = {
+    instance: 'variable', statement: 'variable', param: 'parameter', var: 'variable', let: 'variable',
+    const: 'variable', 'local var': 'variable', alias: 'import', getter: 'property', setter: 'property',
+  };
+  function onsiteHint(cm, callback) {
+    const local = wordHints(cm);
+    if (!lsReady()) { callback(local); return; }
+    const cur = cm.getCursor();
+    const doc = cm.getDoc();
+    lsRequest('completions', { line: cur.line, ch: cur.ch }, 2500).then(items => {
+      if (cm.getDoc() !== doc) { callback(null); return; }
+      const line = cm.getLine(cur.line);
+      let start = cur.ch;
+      while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
+      const query = line.slice(start, cur.ch);
+      const seen = new Set();
+      const list = [];
+      items.forEach(item => {
+        if (seen.has(item.name) || item.name === query) return;
+        const score = matchScore(item.name, query);
+        if (score < 0) return;
+        seen.add(item.name);
+        // Private and dunder names after the public ones, as in VS Code.
+        list.push({ text: item.name, kind: SERVER_KINDS[item.kind] || item.kind, score, rank: item.name.startsWith('_') ? 1 : 0, render: renderHint });
+      });
+      // After a dot the server knows the members; elsewhere add the words it doesn't.
+      if (line[start - 1] !== '.' || !list.length) {
+        (local ? local.list : []).forEach(h => { if (!seen.has(h.text)) { seen.add(h.text); list.push({ ...h, rank: 2 }); } });
+      }
+      list.sort((a, b) => a.score - b.score || a.rank - b.rank || a.text.length - b.text.length || a.text.localeCompare(b.text));
+      callback(list.length ? { list: list.slice(0, 40), from: CodeMirror.Pos(cur.line, start), to: CodeMirror.Pos(cur.line, cur.ch) } : null);
+    }, () => callback(local));
+  }
+  onsiteHint.async = true;
+
+  function wordHints(cm) {
     const lang = completionLang();
     const data = COMPLETIONS[lang];
     if (!data) return null;
@@ -661,6 +705,1291 @@
       return;
     }
     showCompletions(cm);
+  });
+
+  // ---------- VS Code navigation and editing ----------
+  // Go to definition (Cmd/Ctrl+click, F12) and back, references, symbols,
+  // quick open, go to line, find and replace, rename, the command palette,
+  // and the line and multi-cursor commands people reach for out of habit.
+  // Like autocomplete, definitions are read from the code itself (every file
+  // of a practical) rather than a language server.
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+  const MOD = isMac ? 'Cmd' : 'Ctrl';
+  const Pos = CodeMirror.Pos;
+  const IDENT = /[\w$]/;
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const editorSurface = document.getElementById('editorSurface');
+
+  function wordAt(doc, pos) {
+    const line = doc.getLine(pos.line) || '';
+    let start = pos.ch;
+    let end = pos.ch;
+    while (start > 0 && IDENT.test(line[start - 1])) start--;
+    while (end < line.length && IDENT.test(line[end])) end++;
+    if (start === end || /^\d/.test(line.slice(start, end))) return null;
+    const owner = line[start - 1] === '.' ? (line.slice(0, start - 1).match(/([\w$]+)\s*$/) || [])[1] || '' : null;
+    return { name: line.slice(start, end), line: pos.line, start, end, owner };
+  }
+
+  // Files whose names can be looked up from the one being edited: every
+  // file of the practical in the same language, current file first, or the
+  // single-file buffer.
+  function codeSources() {
+    if (!project) return [{ file: null, doc: editor.getDoc() }];
+    const lang = completionLang();
+    const files = project.files.filter(f => langForFile(f.name) === lang);
+    files.sort((a, b) => (b.name === project.current) - (a.name === project.current));
+    return files.map(f => ({ file: f.name, doc: f.doc }));
+  }
+
+  // Every name each line introduces, with where it sits and what encloses it.
+  // A def: { name, line, ch, kind, container ('class' | 'def' | null),
+  // scope (header line of the enclosing function, -1 at module level),
+  // module and imported (for imports) }.
+  const defCache = new WeakMap();
+  function definitionsIn(doc, lang) {
+    const gen = doc.changeGeneration();
+    const cached = defCache.get(doc);
+    if (cached && cached.gen === gen && cached.lang === lang) return cached.defs;
+    const defs = lang === 'python' ? pythonDefinitions(doc) : lang === 'javascript' ? jsDefinitions(doc) : otherDefinitions(doc);
+    defCache.set(doc, { gen, lang, defs });
+    return defs;
+  }
+
+  // The blocks (def/class headers) open at each line, by indentation.
+  function pythonBlocks(doc, upTo) {
+    const stack = [];
+    for (let i = 0; i <= upTo; i++) {
+      const text = doc.getLine(i);
+      if (!text.trim() || /^\s*#/.test(text)) continue;
+      const indent = text.match(/^\s*/)[0].length;
+      while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+      const head = text.match(/^\s*(?:async\s+)?(def|class)\s+\w+/);
+      if (head && i < upTo) stack.push({ indent, kind: head[1], line: i });
+    }
+    return stack;
+  }
+
+  function pythonDefinitions(doc) {
+    const defs = [];
+    const stack = [];
+    doc.eachLine(handle => {
+      const i = doc.getLineNumber(handle);
+      const text = handle.text;
+      if (!text.trim() || /^\s*#/.test(text)) return;
+      const indent = text.match(/^\s*/)[0].length;
+      while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+      const top = stack[stack.length - 1];
+      const container = top ? top.kind : null;
+      const scope = (stack.filter(b => b.kind === 'def').pop() || { line: -1 }).line;
+      const add = (name, kind, from = 0, extra = {}) => {
+        const ch = text.indexOf(name, from);
+        if (ch >= 0) defs.push({ name, line: i, ch, kind, container, scope, ...extra });
+        return ch;
+      };
+      let m;
+      if ((m = text.match(/^\s*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)/))) {
+        const at = add(m[1], 'function');
+        stack.push({ indent, kind: 'def', line: i });
+        let from = text.indexOf('(', at) + 1;
+        for (const part of m[2].split(',')) {
+          const p = part.match(/^\s*\**\s*(\w+)/);
+          if (p && p[1] !== 'self' && p[1] !== 'cls') {
+            const ch = text.indexOf(p[1], from);
+            defs.push({ name: p[1], line: i, ch, kind: 'parameter', container: 'def', scope: i });
+          }
+          from += part.length + 1;
+        }
+        return;
+      }
+      if ((m = text.match(/^\s*class\s+(\w+)/))) {
+        add(m[1], 'class');
+        stack.push({ indent, kind: 'class', line: i });
+        return;
+      }
+      if ((m = text.match(/^\s*from\s+([\w.]+)\s+import\s+\(?([^#]*)/))) {
+        let from = text.indexOf(m[2]);
+        for (const part of m[2].replace(/[()\\]/g, '').split(',')) {
+          const p = part.trim().match(/^(\w+)(?:\s+as\s+(\w+))?/);
+          if (p) add(p[2] || p[1], 'import', from, { module: m[1], imported: p[1] });
+          from += part.length + 1;
+        }
+        return;
+      }
+      if ((m = text.match(/^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?/))) {
+        add(m[2] || m[1].split('.')[0], 'import', text.indexOf('import') + 6, { module: m[1] });
+        return;
+      }
+      if ((m = text.match(/^\s*for\s+(.+?)\s+in\s/))) {
+        for (const v of m[1].matchAll(/\w+/g)) add(v[0], 'variable', text.indexOf('for') + 3);
+      }
+      for (const v of text.matchAll(/\bas\s+(\w+)/g)) add(v[1], 'variable', v.index);
+      if ((m = text.match(/^\s*(\w+(?:\s*,\s*\w+)*)\s*(?::[^=]+)?=(?!=)/))) {
+        let from = indent;
+        for (const v of m[1].split(',')) from = add(v.trim(), 'variable', from) + 1;
+      }
+      for (const v of text.matchAll(/\b(?:self|cls)\.(\w+)\s*(?::[^=]+)?=(?!=)/g)) {
+        defs.push({ name: v[1], line: i, ch: v.index + v[0].indexOf(v[1]), kind: 'attribute', container: 'class', scope: -1 });
+      }
+    });
+    return defs;
+  }
+
+  const JS_NOT_METHODS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'with']);
+  function jsDefinitions(doc) {
+    const defs = [];
+    doc.eachLine(handle => {
+      const i = doc.getLineNumber(handle);
+      const text = handle.text.replace(/\/\/.*$/, '');
+      const add = (name, kind, from = 0, extra = {}) => {
+        const ch = text.indexOf(name, from);
+        if (ch >= 0) defs.push({ name, line: i, ch, kind, container: null, scope: -1, ...extra });
+      };
+      const params = (list, from) => {
+        for (const p of list.matchAll(/(?:^|[,(])\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/g)) add(p[1], 'parameter', from);
+      };
+      let m;
+      for (m of text.matchAll(/\bfunction\s*\*?\s*([\w$]+)?\s*\(([^)]*)/g)) {
+        if (m[1]) add(m[1], 'function', m.index);
+        params(m[2], m.index);
+      }
+      for (m of text.matchAll(/\bclass\s+([\w$]+)/g)) add(m[1], 'class', m.index);
+      for (m of text.matchAll(/\b(?:const|let|var)\s+([\w$]+)/g)) add(m[1], 'variable', m.index + m[0].length - m[1].length);
+      for (m of text.matchAll(/\b(?:const|let|var)\s*[{[]([^}\]=]*)/g)) {
+        for (const v of m[1].matchAll(/([\w$]+)\s*(?=,|$)/g)) add(v[1], 'variable', m.index);
+      }
+      for (m of text.matchAll(/\(([^()]*)\)\s*=>/g)) params(m[1], m.index);
+      for (m of text.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) add(m[1], 'parameter', m.index);
+      if ((m = text.match(/^\s*(?:static\s+|async\s+|get\s+|set\s+)*([\w$]+)\s*\(([^)]*)\)\s*\{/)) && !JS_NOT_METHODS.has(m[1])) {
+        add(m[1], 'method', 0, { container: 'class' });
+        params(m[2], text.indexOf('('));
+      }
+      for (m of text.matchAll(/\bthis\.([\w$]+)\s*=(?!=)/g)) add(m[1], 'attribute', m.index, { container: 'class' });
+      for (m of text.matchAll(/\b(?:const|let|var)\s+([\w$]+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+        defs.push({ name: m[1], line: i, ch: text.indexOf(m[1], m.index), kind: 'import', container: null, scope: -1, module: m[2] });
+      }
+      for (m of text.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+        for (const v of m[1].matchAll(/([\w$]+)(?:\s*:\s*([\w$]+))?/g)) {
+          const local = v[2] || v[1];
+          defs.push({ name: local, line: i, ch: text.indexOf(local, m.index), kind: 'import', container: null, scope: -1, module: m[2], imported: v[1] });
+        }
+      }
+      if ((m = text.match(/^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]/))) {
+        for (const v of m[1].matchAll(/([\w$]+)(?:\s+as\s+([\w$]+))?/g)) {
+          const local = v[2] || v[1];
+          defs.push({ name: local, line: i, ch: text.indexOf(local), kind: 'import', container: null, scope: -1, module: m[2], imported: m[1].includes('{') ? v[1] : null });
+        }
+      }
+    });
+    return defs;
+  }
+
+  function otherDefinitions(doc) {
+    const defs = [];
+    doc.eachLine(handle => {
+      const i = doc.getLineNumber(handle);
+      const text = handle.text;
+      const add = (name, kind, from) => defs.push({ name, line: i, ch: text.indexOf(name, from), kind, container: null, scope: -1 });
+      for (const m of text.matchAll(/\b(?:class|struct|interface|enum)\s+(\w+)/g)) add(m[1], 'class', m.index);
+      const fn = text.match(/^\s*(?:[\w<>[\],:*&]+\s+)+(\w+)\s*\([^;]*$/);
+      if (fn && !JS_NOT_METHODS.has(fn[1])) add(fn[1], 'function', 0);
+      for (const m of text.matchAll(/\b(?:int|long|double|float|bool|boolean|char|string|String|auto|var|size_t)\s+(\w+)\s*(?=[=;,)\[])/g)) add(m[1], 'variable', m.index);
+    });
+    return defs;
+  }
+
+  // The file an import points at, if it's part of the practical.
+  function moduleFile(module, lang) {
+    if (!project) return null;
+    const names = project.files.map(f => f.name);
+    if (lang === 'python') {
+      const path = module.replace(/\./g, '/');
+      return names.find(n => n === `${path}.py` || n === `${path}/__init__.py`) || names.find(n => n.endsWith(`/${path}.py`)) || null;
+    }
+    const base = module.replace(/^\.\//, '').replace(/\.[cm]?js$/, '');
+    return names.find(n => n === `${base}.js` || n === `${base}/index.js` || n.replace(/\.[cm]?js$/, '') === base) || null;
+  }
+
+  function locate(source, def) {
+    return { file: source.file, line: def.line, ch: def.ch, len: def.name.length };
+  }
+
+  // A module-level name in a file, following re-imports a few hops.
+  function topLevelIn(file, name, lang, hops = 0) {
+    const f = project && project.files.find(x => x.name === file);
+    if (!f) return null;
+    const defs = definitionsIn(f.doc, lang).filter(d => d.name === name && d.container === null && d.scope === -1);
+    const best = defs.find(d => d.kind === 'function' || d.kind === 'class') || defs.find(d => d.kind !== 'import') || defs[0];
+    if (!best) return null;
+    if (best.kind === 'import' && hops < 3) return followImport({ file, doc: f.doc }, best, lang, hops + 1) || locate({ file }, best);
+    return locate({ file }, best);
+  }
+
+  function followImport(source, def, lang, hops = 0) {
+    const target = moduleFile(def.module, lang);
+    if (!target) return null;
+    if (def.imported) return topLevelIn(target, def.imported, lang, hops) || { file: target, line: 0, ch: 0, len: 0 };
+    return { file: target, line: 0, ch: 0, len: 0 };
+  }
+
+  // Where the name at pos is defined: { file, line, ch, len, self } or null.
+  function findDefinition(pos) {
+    const doc = editor.getDoc();
+    const word = wordAt(doc, pos);
+    if (!word) return null;
+    const type = editor.getTokenTypeAt(Pos(pos.line, word.start + 1)) || '';
+    if (/comment|string|keyword/.test(type)) return null;
+    const lang = completionLang();
+    const sources = codeSources();
+    const here = sources[0];
+    const { name } = word;
+    const isSelf = d => d.line === word.line && d.ch === word.start;
+    const result = (src, d) => ({ ...locate(src, d), self: src === here && isSelf(d) });
+
+    if (word.owner !== null) {
+      // obj.name: a module's top-level name, else a method or attribute.
+      const imported = definitionsIn(here.doc, lang).find(d => d.kind === 'import' && d.name === word.owner && !d.imported);
+      const moduleTarget = imported ? moduleFile(imported.module, lang) : moduleFile(word.owner, lang);
+      if (moduleTarget) {
+        const hit = topLevelIn(moduleTarget, name, lang);
+        if (hit) return hit;
+      }
+      for (const src of sources) {
+        const defs = definitionsIn(src.doc, lang).filter(d => d.name === name && d.container === 'class');
+        const best = defs.find(d => d.kind === 'function' || d.kind === 'method') || defs[0];
+        if (best) return result(src, best);
+      }
+      return null;
+    }
+
+    // A bare name: the innermost enclosing scope that defines it, the
+    // nearest definition above the cursor first.
+    const defs = definitionsIn(here.doc, lang).filter(d => d.name === name);
+    const onDef = defs.find(isSelf);
+    if (onDef && onDef.kind !== 'import') return result(here, onDef);
+    let visible = defs.filter(d => d.container !== 'class' || d.kind === 'class');
+    if (lang === 'python') {
+      const chain = [-1, ...pythonBlocks(here.doc, pos.line).filter(b => b.kind === 'def').map(b => b.line)];
+      visible = visible.filter(d => chain.includes(d.scope));
+      const depth = d => chain.indexOf(d.scope);
+      visible.sort((a, b) => depth(b) - depth(a));
+      const inner = visible.length ? depth(visible[0]) : -1;
+      visible = visible.filter(d => depth(d) === inner);
+    }
+    const above = visible.filter(d => d.line <= pos.line);
+    const pick = above[above.length - 1] || visible[0];
+    if (pick) {
+      if (pick.kind === 'import') return followImport(here, pick, lang) || result(here, pick);
+      return result(here, pick);
+    }
+    for (const src of sources.slice(1)) {
+      const hit = topLevelIn(src.file, name, lang);
+      if (hit) return hit;
+    }
+    // Class members used by bare name in JS (and anything else as a fallback).
+    for (const src of sources) {
+      const d = definitionsIn(src.doc, lang).find(x => x.name === name);
+      if (d) return result(src, d);
+    }
+    return null;
+  }
+
+  // Where the cursor has been, for Go back / Go forward.
+  const navBack = [];
+  const navForward = [];
+  function cursorLocation() {
+    const p = editor.getCursor();
+    return { file: currentFileName(), line: p.line, ch: p.ch, len: 0 };
+  }
+  function locationExists(loc) {
+    return loc.file === null ? !project : !!(project && project.files.some(f => f.name === loc.file));
+  }
+
+  let flashMark = null;
+  function revealLocation(loc, record = true) {
+    if (!locationExists(loc)) return false;
+    if (record) {
+      navBack.push(cursorLocation());
+      if (navBack.length > 50) navBack.shift();
+      navForward.length = 0;
+    }
+    if (loc.file && loc.file !== currentFileName()) showFile(loc.file);
+    const from = Pos(loc.line, loc.ch);
+    editor.setCursor(from);
+    editor.scrollIntoView({ from, to: Pos(loc.line, loc.ch + loc.len) }, editor.getScrollerElement().clientHeight / 3);
+    if (flashMark) flashMark.clear();
+    if (loc.len) {
+      flashMark = editor.markText(from, Pos(loc.line, loc.ch + loc.len), { className: 'cm-def-flash' });
+      const mark = flashMark;
+      setTimeout(() => { mark.clear(); if (flashMark === mark) flashMark = null; }, 900);
+    }
+    editor.focus();
+    return true;
+  }
+  function navigate(from, to) {
+    while (from.length) {
+      const loc = from.pop();
+      if (!locationExists(loc)) continue;
+      to.push(cursorLocation());
+      revealLocation(loc, false);
+      return;
+    }
+  }
+  const goBack = () => navigate(navBack, navForward);
+  const goForward = () => navigate(navForward, navBack);
+
+  let noticeTimer = null;
+  const notice = document.createElement('div');
+  notice.className = 'editor-notice hidden';
+  editorSurface.appendChild(notice);
+  function showNotice(text) {
+    notice.textContent = text;
+    notice.classList.remove('hidden');
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => notice.classList.add('hidden'), 1800);
+  }
+
+  // ----- Language servers -----
+  // Definitions, references, renames, hover info, completions and problems
+  // come from lang-server.js: Jedi for Python and TypeScript's language
+  // service for JavaScript, in a worker. It starts loading the first time
+  // someone clicks into the editor. Until it's ready, or if it can't load,
+  // the lookups above (which read the code directly) stand in.
+  const lsState = {}; // lang -> 'loading' | 'ready' | 'failed'
+  const lsPending = new Map();
+  let lsWorker = null;
+  let lsSeq = 0;
+  const lsStatusEl = document.getElementById('languageServerStatus');
+  const hasServer = lang => lang === 'python' || lang === 'javascript';
+
+  function lsUsable(lang = completionLang()) {
+    return !!editorPrefs.languageServer && hasServer(lang) && typeof Worker === 'function' && lsState[lang] !== 'failed';
+  }
+  function lsReady(lang = completionLang()) {
+    return lsUsable(lang) && lsState[lang] === 'ready';
+  }
+  // A single-file room's buffer goes to the server under this name.
+  const bufferFile = lang => (lang === 'python' ? 'main.py' : 'main.js');
+  // A server location in the editor's terms, or null if it's outside the code here.
+  function lsLocation(d, lang) {
+    if (!d.file) return null;
+    if (!project) return d.file === bufferFile(lang) ? { ...d, file: null } : null;
+    return project.files.some(f => f.name === d.file) ? d : null;
+  }
+  function renderLsStatus() {
+    if (!lsStatusEl) return;
+    const lang = completionLang();
+    const name = (LANGS[lang] || {}).label || lang;
+    if (!editorPrefs.languageServer) lsStatusEl.textContent = 'Off. Navigation reads the code directly.';
+    else if (!hasServer(lang)) lsStatusEl.textContent = `None for ${name}. Navigation reads the code directly.`;
+    else lsStatusEl.textContent = {
+      loading: `${name}: starting…`,
+      ready: `${name}: ready`,
+      failed: `${name}: couldn't load. Navigation reads the code directly.`,
+    }[lsState[lang]] || `${name}: starts when you click into the code.`;
+  }
+
+  function lsRequest(op, args = {}, timeout = 15000) {
+    const lang = completionLang();
+    if (!lsUsable(lang)) return Promise.reject(new Error('unavailable'));
+    if (!lsWorker) {
+      lsWorker = new Worker('lang-server.js?v=2', { type: 'module' });
+      lsWorker.onmessage = ({ data }) => {
+        if (data.type === 'status') {
+          lsState[data.lang] = data.state;
+          renderLsStatus();
+          if (data.state === 'ready' && data.lang === completionLang()) refreshDiagnosticsSoon(0);
+          return;
+        }
+        const pending = lsPending.get(data.id);
+        if (!pending) return;
+        lsPending.delete(data.id);
+        clearTimeout(pending.timer);
+        if (data.error) pending.reject(new Error(data.error));
+        else pending.resolve(data.result);
+      };
+    }
+    const files = project
+      ? project.files.filter(f => langForFile(f.name) === lang).map(f => ({ name: f.name, content: f.doc.getValue() }))
+      : [{ name: bufferFile(lang), content: editor.getValue() }];
+    const id = ++lsSeq;
+    // A request made while the server loads waits for it.
+    const wait = lsState[lang] === 'ready' ? timeout : Math.max(timeout, 90000);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { lsPending.delete(id); reject(new Error('timeout')); }, wait);
+      lsPending.set(id, { resolve, reject, timer });
+      lsWorker.postMessage({ id, op, lang, files, file: project ? project.current : bufferFile(lang), ...args });
+    });
+  }
+  // Load the server for whatever's being edited once someone works in the
+  // editor, including after switching to a file or language that needs another.
+  function warmLanguageServer() {
+    renderLsStatus();
+    if (editor.hasFocus() && lsUsable() && !lsState[completionLang()]) lsRequest('diagnostics').catch(() => {});
+  }
+  editor.on('focus', warmLanguageServer);
+  editor.on('swapDoc', warmLanguageServer);
+  langSelect.addEventListener('change', warmLanguageServer);
+
+  // Problems: squiggles under errors (red) and warnings (amber), with the
+  // message on hover.
+  let diagMarks = [];
+  let diagnostics = []; // { from, to, severity, message }
+  let diagTimer = null;
+  function clearDiagnostics() {
+    diagMarks.forEach(m => m.clear());
+    diagMarks = [];
+    diagnostics = [];
+  }
+  function refreshDiagnosticsSoon(delay = 700) {
+    clearTimeout(diagTimer);
+    diagTimer = setTimeout(refreshDiagnostics, delay);
+  }
+  async function refreshDiagnostics() {
+    if (!lsReady() || mode === 'draw') { clearDiagnostics(); return; }
+    const doc = editor.getDoc();
+    const gen = doc.changeGeneration();
+    let items;
+    try { items = await lsRequest('diagnostics'); } catch { return; }
+    if (editor.getDoc() !== doc || doc.changeGeneration() !== gen) return; // a newer check is on its way
+    clearDiagnostics();
+    editor.operation(() => {
+      items.forEach(d => {
+        const lineText = doc.getLine(d.line);
+        if (lineText == null) return;
+        let from = Pos(d.line, Math.min(d.ch, lineText.length));
+        let to = d.endLine == null ? null : Pos(d.endLine, d.endCh);
+        if (!to || CodeMirror.cmpPos(to, from) <= 0) {
+          const word = wordAt(doc, from);
+          to = word && word.start === from.ch ? Pos(d.line, word.end) : Pos(d.line, from.ch + 1);
+        }
+        if (to.line === from.line && to.ch > lineText.length) {
+          to = Pos(d.line, lineText.length);
+          if (to.ch <= from.ch) from = Pos(d.line, Math.max(0, to.ch - 1));
+        }
+        diagnostics.push({ from, to, severity: d.severity, message: d.message });
+        diagMarks.push(editor.markText(from, to, { className: `cm-diag-${d.severity}` }));
+      });
+    });
+  }
+  editor.on('changes', () => { if (lsReady()) refreshDiagnosticsSoon(); });
+  editor.on('swapDoc', () => { clearDiagnostics(); if (lsReady()) refreshDiagnosticsSoon(50); });
+
+  // Hover: the type or signature and docs of the name under the mouse, and
+  // the message of any problem there.
+  const hoverCard = document.createElement('div');
+  hoverCard.className = 'editor-hover hidden';
+  editorSurface.appendChild(hoverCard);
+  let hoverTimer = null;
+  let hoverKey = '';
+  function hideHover() {
+    clearTimeout(hoverTimer);
+    hoverKey = '';
+    hoverCard.classList.add('hidden');
+  }
+  function placeHover(coords) {
+    const box = editorSurface.getBoundingClientRect();
+    hoverCard.classList.remove('hidden');
+    const left = Math.max(8, Math.min(coords.left - box.left, box.width - hoverCard.offsetWidth - 8));
+    const above = coords.top - box.top - hoverCard.offsetHeight - 6;
+    hoverCard.style.left = `${left}px`;
+    hoverCard.style.top = `${above >= 4 ? above : coords.bottom - box.top + 6}px`;
+  }
+  function renderHover(parts) {
+    hoverCard.innerHTML = '';
+    parts.forEach(({ className, text }) => {
+      const el = document.createElement('div');
+      el.className = className;
+      el.textContent = text;
+      hoverCard.appendChild(el);
+    });
+  }
+  editor.getWrapperElement().addEventListener('mousemove', e => {
+    if (modKey(e) || e.buttons) { hideHover(); return; }
+    const pos = editor.coordsChar({ left: e.clientX, top: e.clientY }, 'window');
+    const at = editor.charCoords(pos, 'window');
+    if (e.clientY < at.top || e.clientY > at.bottom) { hideHover(); return; }
+    const problem = diagnostics.find(d => CodeMirror.cmpPos(d.from, pos) <= 0 && CodeMirror.cmpPos(pos, d.to) <= 0);
+    const word = wordAt(editor.getDoc(), pos);
+    const key = problem ? `p:${problem.from.line}:${problem.from.ch}` : word ? `w:${word.line}:${word.start}` : '';
+    if (key === hoverKey) return;
+    hideHover();
+    if (!key) return;
+    hoverKey = key;
+    hoverTimer = setTimeout(async () => {
+      const parts = [];
+      if (problem) parts.push({ className: `hover-problem hover-${problem.severity}`, text: problem.message });
+      const type = word ? editor.getTokenTypeAt(Pos(word.line, word.start + 1)) || '' : '';
+      if (word && lsReady() && !/comment|string|keyword/.test(type)) {
+        try {
+          const info = await lsRequest('hover', { line: word.line, ch: word.start }, 4000);
+          if (info) {
+            parts.push({ className: 'hover-title', text: info.title });
+            if (info.doc) parts.push({ className: 'hover-doc', text: info.doc.trim() });
+          }
+        } catch {}
+      }
+      if (hoverKey !== key || !parts.length) return;
+      renderHover(parts);
+      placeHover(editor.charCoords(problem ? problem.from : Pos(word.line, word.start), 'window'));
+    }, 450);
+  });
+  editor.getWrapperElement().addEventListener('mouseleave', hideHover);
+  editor.on('keydown', hideHover);
+  editor.on('mousedown', hideHover);
+  editor.on('scroll', hideHover);
+
+  async function goToDefinition(pos = editor.getCursor()) {
+    const word = wordAt(editor.getDoc(), pos);
+    if (!word) return;
+    const lang = completionLang();
+    const doc = editor.getDoc();
+    if (lsUsable(lang)) {
+      if (!lsReady(lang)) showNotice(`Starting the ${LANGS[lang].label} language server…`);
+      let defs = null;
+      try { defs = await lsRequest('definition', { line: pos.line, ch: pos.ch }); } catch {}
+      if (editor.getDoc() !== doc) return; // they moved on while it loaded
+      if (defs) {
+        const here = currentFileName();
+        const local = defs.map(d => lsLocation(d, lang)).filter(Boolean);
+        if (local.length) {
+          const d = local[0];
+          // On the definition itself, VS Code shows its uses instead.
+          if (d.file === here && d.line === word.line && d.ch === word.start) { showReferences(pos); return; }
+          revealLocation({ file: d.file, line: d.line, ch: d.ch, len: d.len });
+          return;
+        }
+        if (defs.length) {
+          const where = defs[0].module;
+          showNotice(where ? `'${word.name}' is defined in ${where}, outside this code` : `'${word.name}' is built in`);
+          return;
+        }
+        // Nothing the server could infer (say, an untyped parameter): fall back to a best guess.
+      }
+    }
+    const def = findDefinition(pos);
+    if (!def) { showNotice(`No definition found for '${word.name}'`); return; }
+    if (def.self) { showReferences(pos); return; }
+    revealLocation(def);
+  }
+
+  // Cmd/Ctrl+click goes to the definition (Alt+click adds a cursor, and
+  // Shift+Alt+drag selects a column, as in VS Code). Holding Cmd/Ctrl
+  // underlines names you can follow.
+  const modKey = e => (isMac ? e.metaKey : e.ctrlKey);
+  editor.setOption('configureMouse', (cm, repeat, e) => ({
+    unit: e.altKey && e.shiftKey ? 'rectangle' : repeat === 'double' ? 'word' : repeat === 'triple' ? 'line' : 'char',
+    addNew: e.altKey && !e.shiftKey,
+  }));
+  editor.on('mousedown', (cm, e) => {
+    if (e.button !== 0 || !modKey(e) || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    const pos = cm.coordsChar({ left: e.clientX, top: e.clientY }, 'window');
+    cm.setCursor(pos); // so Go Back returns to the click
+    cm.focus();
+    goToDefinition(pos);
+  });
+  let linkMark = null;
+  let linkKey = '';
+  function clearLink() {
+    if (linkMark) linkMark.clear();
+    linkMark = null;
+    linkKey = '';
+    editor.getWrapperElement().classList.remove('goto-armed');
+  }
+  editor.getWrapperElement().addEventListener('mousemove', e => {
+    if (!modKey(e) || e.altKey) { if (linkMark) clearLink(); return; }
+    const pos = editor.coordsChar({ left: e.clientX, top: e.clientY }, 'window');
+    const word = wordAt(editor.getDoc(), pos);
+    const key = word ? `${word.line}:${word.start}` : '';
+    if (key === linkKey) return;
+    clearLink();
+    linkKey = key;
+    if (!word) return;
+    const markLink = () => {
+      if (linkKey !== key) return;
+      linkMark = editor.markText(Pos(word.line, word.start), Pos(word.line, word.end), { className: 'cm-goto-link' });
+      editor.getWrapperElement().classList.add('goto-armed');
+    };
+    if (lsReady()) {
+      lsRequest('definition', { line: pos.line, ch: pos.ch }, 3000).then(defs => {
+        const lang = completionLang();
+        const self = d => (d.file === currentFileName()) && d.line === word.line && d.ch === word.start;
+        if (defs.some(d => !lsLocation(d, lang) || !self(lsLocation(d, lang)))) markLink();
+      }).catch(() => {});
+      return;
+    }
+    const def = findDefinition(pos);
+    if (def && !def.self) markLink();
+  });
+  editor.getWrapperElement().addEventListener('mouseleave', clearLink);
+  window.addEventListener('keyup', e => { if (e.key === 'Meta' || e.key === 'Control') clearLink(); });
+  window.addEventListener('blur', clearLink);
+
+  // Other uses of the name under the cursor (or the selected text), as in
+  // VS Code's occurrence highlight.
+  let occurrenceMarks = [];
+  let occurrenceTimer = null;
+  function clearOccurrences() {
+    occurrenceMarks.forEach(m => m.clear());
+    occurrenceMarks = [];
+  }
+  function wordRegex(text, wholeWord, caseSensitive) {
+    const body = escapeRe(text);
+    return new RegExp(wholeWord ? `(?<![\\w$])${body}(?![\\w$])` : body, caseSensitive ? 'g' : 'gi');
+  }
+  function highlightOccurrences() {
+    clearOccurrences();
+    const doc = editor.getDoc();
+    if (mode === 'draw' || doc.lineCount() > 5000 || doc.listSelections().length > 1) return;
+    let text;
+    let whole = true;
+    if (doc.somethingSelected()) {
+      text = doc.getSelection();
+      whole = false;
+      if (!text.trim() || text.includes('\n') || text.length > 200) return;
+    } else {
+      const word = wordAt(doc, doc.getCursor());
+      if (!word) return;
+      const type = editor.getTokenTypeAt(Pos(word.line, word.start + 1)) || '';
+      if (/comment|string|keyword/.test(type)) return;
+      text = word.name;
+    }
+    const re = wordRegex(text, whole, true);
+    const hits = [];
+    doc.eachLine(handle => {
+      if (hits.length > 500) return;
+      const line = doc.getLineNumber(handle);
+      for (const m of handle.text.matchAll(re)) hits.push([Pos(line, m.index), Pos(line, m.index + m[0].length)]);
+    });
+    if (hits.length < 2) return;
+    editor.operation(() => {
+      occurrenceMarks = hits.map(([from, to]) => editor.markText(from, to, { className: 'cm-occurrence' }));
+    });
+  }
+  editor.on('cursorActivity', () => {
+    clearTimeout(occurrenceTimer);
+    occurrenceTimer = setTimeout(highlightOccurrences, 120);
+  });
+  editor.on('swapDoc', () => { clearOccurrences(); clearLink(); });
+
+  // ----- Find and replace -----
+  const findWidget = document.createElement('div');
+  findWidget.className = 'find-widget hidden';
+  findWidget.innerHTML = `
+    <div class="find-row">
+      <input class="find-input" type="text" placeholder="Find" spellcheck="false" aria-label="Find" />
+      <button type="button" class="find-opt" data-find="case" title="Match case" aria-pressed="false">Aa</button>
+      <button type="button" class="find-opt" data-find="word" title="Match whole word" aria-pressed="false"><u>ab</u></button>
+      <span class="find-count" aria-live="polite">No results</span>
+      <button type="button" class="find-btn" data-find="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">&uarr;</button>
+      <button type="button" class="find-btn" data-find="next" title="Next match (Enter)" aria-label="Next match">&darr;</button>
+      <button type="button" class="find-btn" data-find="close" title="Close (Esc)" aria-label="Close">&times;</button>
+    </div>
+    <div class="find-row replace-row hidden">
+      <input class="replace-input" type="text" placeholder="Replace" spellcheck="false" aria-label="Replace" />
+      <button type="button" class="find-btn find-text" data-find="replace" title="Replace (Enter)">Replace</button>
+      <button type="button" class="find-btn find-text" data-find="all" title="Replace all (${MOD}+Alt+Enter)">All</button>
+    </div>`;
+  editorSurface.appendChild(findWidget);
+  const findInput = findWidget.querySelector('.find-input');
+  const replaceInput = findWidget.querySelector('.replace-input');
+  const findCount = findWidget.querySelector('.find-count');
+  const find = { matches: [], index: -1, marks: [], current: null, caseSensitive: false, wholeWord: false };
+
+  function findIsOpen() { return !findWidget.classList.contains('hidden'); }
+  function clearFindMarks() {
+    find.marks.forEach(m => m.clear());
+    find.marks = [];
+    if (find.current) find.current.clear();
+    find.current = null;
+  }
+  function refreshFind(anchor) {
+    clearFindMarks();
+    find.matches = [];
+    const query = findInput.value;
+    if (query && !query.includes('\n')) {
+      const re = wordRegex(query, find.wholeWord, find.caseSensitive);
+      const doc = editor.getDoc();
+      doc.eachLine(handle => {
+        if (find.matches.length >= 2000) return;
+        const line = doc.getLineNumber(handle);
+        for (const m of handle.text.matchAll(re)) find.matches.push({ from: Pos(line, m.index), to: Pos(line, m.index + m[0].length) });
+      });
+      editor.operation(() => {
+        find.marks = find.matches.map(m => editor.markText(m.from, m.to, { className: 'cm-find-match' }));
+      });
+    }
+    const at = anchor || editor.getCursor('from');
+    find.index = find.matches.findIndex(m => CodeMirror.cmpPos(m.from, at) >= 0);
+    if (find.index < 0) find.index = find.matches.length ? 0 : -1;
+    showCurrentMatch(false);
+  }
+  function showCurrentMatch(select) {
+    if (find.current) find.current.clear();
+    find.current = null;
+    const m = find.matches[find.index];
+    findCount.textContent = !findInput.value ? 'No results' : m ? `${find.index + 1} of ${find.matches.length}` : 'No results';
+    findWidget.classList.toggle('no-results', !!findInput.value && !m);
+    if (!m) return;
+    find.current = editor.markText(m.from, m.to, { className: 'cm-find-current' });
+    if (select) editor.setSelection(m.from, m.to);
+    editor.scrollIntoView({ from: m.from, to: m.to }, editor.getScrollerElement().clientHeight / 3);
+  }
+  function findStep(dir) {
+    if (!find.matches.length) return;
+    find.index = (find.index + dir + find.matches.length) % find.matches.length;
+    showCurrentMatch(true);
+  }
+  function openFind(withReplace) {
+    if (mode === 'draw') return;
+    closePalette();
+    const doc = editor.getDoc();
+    const selected = doc.getSelection();
+    const word = wordAt(doc, doc.getCursor());
+    if (selected && !selected.includes('\n')) findInput.value = selected;
+    else if (!selected && word && !findIsOpen()) findInput.value = word.name;
+    const canReplace = withReplace && !editor.getOption('readOnly');
+    findWidget.querySelector('.replace-row').classList.toggle('hidden', !canReplace);
+    findWidget.classList.remove('hidden');
+    refreshFind(doc.getCursor('from'));
+    const input = canReplace && withReplace === 'focus-replace' ? replaceInput : findInput;
+    input.focus();
+    input.select();
+  }
+  function closeFind() {
+    if (!findIsOpen()) return;
+    findWidget.classList.add('hidden');
+    clearFindMarks();
+    find.matches = [];
+    editor.focus();
+  }
+  function replaceCurrent() {
+    if (editor.getOption('readOnly')) return;
+    const m = find.matches[find.index];
+    if (!m) return;
+    editor.replaceRange(replaceInput.value, m.from, m.to, '+replace');
+    refreshFind(Pos(m.from.line, m.from.ch + replaceInput.value.length));
+    if (find.matches.length) showCurrentMatch(true);
+  }
+  function replaceAll() {
+    if (editor.getOption('readOnly') || !find.matches.length) return;
+    const count = find.matches.length;
+    editor.operation(() => {
+      for (let i = find.matches.length - 1; i >= 0; i--) editor.replaceRange(replaceInput.value, find.matches[i].from, find.matches[i].to, '+replace');
+    });
+    refreshFind();
+    showNotice(`Replaced ${count} occurrence${count === 1 ? '' : 's'}`);
+  }
+  findInput.addEventListener('input', () => refreshFind(editor.getCursor('from')));
+  findWidget.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); closeFind(); return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.target === replaceInput) {
+      if (modKey(e) && e.altKey) replaceAll();
+      else replaceCurrent();
+    } else {
+      findStep(e.shiftKey ? -1 : 1);
+    }
+  });
+  findWidget.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const act = btn.dataset.find;
+    if (act === 'case' || act === 'word') {
+      const key = act === 'case' ? 'caseSensitive' : 'wholeWord';
+      find[key] = !find[key];
+      btn.setAttribute('aria-pressed', String(find[key]));
+      refreshFind();
+      findInput.focus();
+    } else if (act === 'prev') findStep(-1);
+    else if (act === 'next') findStep(1);
+    else if (act === 'close') closeFind();
+    else if (act === 'replace') replaceCurrent();
+    else if (act === 'all') replaceAll();
+  });
+  let findRefreshTimer = null;
+  editor.on('changes', () => {
+    if (!findIsOpen()) return;
+    clearTimeout(findRefreshTimer);
+    findRefreshTimer = setTimeout(() => refreshFind(), 80);
+  });
+  editor.on('swapDoc', () => { if (findIsOpen()) refreshFind(); });
+
+  // ----- The palette: go to line, quick open, symbols, references, rename, commands -----
+  const palette = document.createElement('div');
+  palette.className = 'palette hidden';
+  palette.innerHTML = '<input class="palette-input" type="text" spellcheck="false" aria-label="Command" /><ul class="palette-list" role="listbox"></ul>';
+  editorSurface.appendChild(palette);
+  const paletteInput = palette.querySelector('.palette-input');
+  const paletteList = palette.querySelector('.palette-list');
+  let paletteItems = [];
+  let paletteActive = 0;
+  let paletteSource = null; // query -> items, or null for an input-only prompt
+  let paletteAccept = null;
+
+  // items: [{ label, detail, run }]; label matches use the autocomplete scorer.
+  function openPalette({ placeholder, value = '', items = null, accept = null }) {
+    if (mode === 'draw') return;
+    closeFind();
+    paletteSource = items;
+    paletteAccept = accept;
+    paletteInput.placeholder = placeholder;
+    paletteInput.value = value;
+    palette.classList.remove('hidden');
+    renderPalette();
+    paletteInput.focus();
+    paletteInput.select();
+  }
+  function closePalette(refocus = true) {
+    if (palette.classList.contains('hidden')) return;
+    palette.classList.add('hidden');
+    paletteItems = [];
+    if (refocus) editor.focus();
+  }
+  function renderPalette() {
+    paletteList.innerHTML = '';
+    if (!paletteSource) { paletteList.classList.add('hidden'); return; }
+    paletteItems = paletteSource(paletteInput.value);
+    paletteActive = 0;
+    paletteList.classList.toggle('hidden', !paletteItems.length);
+    paletteItems.slice(0, 60).forEach((item, i) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.className = 'palette-item' + (i === 0 ? ' active' : '');
+      const label = document.createElement('span');
+      label.className = 'palette-label';
+      label.textContent = item.label;
+      li.appendChild(label);
+      if (item.detail) {
+        const detail = document.createElement('span');
+        detail.className = 'palette-detail';
+        detail.textContent = item.detail;
+        li.appendChild(detail);
+      }
+      li.addEventListener('mousedown', e => { e.preventDefault(); runPaletteItem(i); });
+      paletteList.appendChild(li);
+    });
+  }
+  function setPaletteActive(i) {
+    const lis = paletteList.children;
+    if (!lis.length) return;
+    paletteActive = (i + lis.length) % lis.length;
+    [...lis].forEach((li, j) => li.classList.toggle('active', j === paletteActive));
+    lis[paletteActive].scrollIntoView({ block: 'nearest' });
+  }
+  function runPaletteItem(i) {
+    const item = paletteItems[i];
+    closePalette(false);
+    if (item) item.run();
+    else editor.focus();
+  }
+  paletteInput.addEventListener('input', renderPalette);
+  paletteInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteActive(paletteActive + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteActive(paletteActive - 1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (paletteSource) runPaletteItem(paletteActive);
+      else { const value = paletteInput.value; closePalette(false); paletteAccept(value); }
+    }
+  });
+  paletteInput.addEventListener('blur', () => setTimeout(() => { if (!palette.contains(document.activeElement)) closePalette(false); }, 0));
+  // An item matches on its label or, for paths, its file name.
+  const filterItems = (items, query) => {
+    const q = query.trim();
+    return items
+      .map(item => {
+        const scores = [item.label, item.match].filter(Boolean).map(t => matchScore(t, q)).filter(s => s >= 0);
+        return { item, score: scores.length ? Math.min(...scores) : -1 };
+      })
+      .filter(x => x.score >= 0)
+      .sort((a, b) => a.score - b.score)
+      .map(x => x.item);
+  };
+
+  function goToLine() {
+    const doc = editor.getDoc();
+    openPalette({
+      placeholder: `Go to line (1 to ${doc.lineCount()}), or line:column`,
+      accept: value => {
+        const m = value.trim().match(/^(\d+)(?:[:,](\d+))?$/);
+        if (!m) { editor.focus(); return; }
+        const line = Math.min(doc.lineCount(), Math.max(1, +m[1])) - 1;
+        const ch = m[2] ? Math.max(0, +m[2] - 1) : (doc.getLine(line).match(/^\s*/)[0].length);
+        revealLocation({ file: currentFileName(), line, ch, len: 0 });
+      },
+    });
+  }
+
+  function quickOpen() {
+    if (!project) { showNotice('This room has a single file'); return; }
+    openPalette({
+      placeholder: 'Go to file',
+      items: query => filterItems(project.files.map(f => ({
+        label: f.name,
+        match: f.name.replace(/^.*\//, ''),
+        detail: f.name === project.current ? 'current' : f.hidden ? 'hidden' : '',
+        run: () => { showFile(f.name); editor.focus(); },
+      })), query),
+    });
+  }
+
+  function goToSymbol() {
+    const doc = editor.getDoc();
+    const lang = completionLang();
+    const symbols = definitionsIn(doc, lang).filter(d => ['function', 'class', 'method'].includes(d.kind) || (d.kind === 'variable' && d.scope === -1 && d.container === null));
+    openPalette({
+      placeholder: 'Go to symbol in file',
+      items: query => filterItems(symbols.map(d => ({
+        label: d.name,
+        detail: `${d.container === 'class' && d.kind === 'function' ? 'method' : d.kind} · line ${d.line + 1}`,
+        run: () => revealLocation({ file: currentFileName(), line: d.line, ch: d.ch, len: d.name.length }),
+      })), query),
+    });
+  }
+
+  // Every use of a name, in code (not comments or strings) where we can tell.
+  function referencesTo(name) {
+    const refs = [];
+    const re = wordRegex(name, true, true);
+    const current = editor.getDoc();
+    for (const src of codeSources()) {
+      src.doc.eachLine(handle => {
+        const line = src.doc.getLineNumber(handle);
+        for (const m of handle.text.matchAll(re)) {
+          if (src.doc === current && /comment|string/.test(editor.getTokenTypeAt(Pos(line, m.index + 1)) || '')) continue;
+          refs.push({ file: src.file, line, ch: m.index, len: name.length, text: handle.text.trim() });
+        }
+      });
+    }
+    return refs;
+  }
+  async function showReferences(pos = editor.getCursor()) {
+    const word = wordAt(editor.getDoc(), pos);
+    if (!word) return;
+    const lang = completionLang();
+    let refs = null;
+    if (lsUsable(lang)) {
+      try {
+        const found = await lsRequest('references', { line: pos.line, ch: pos.ch });
+        refs = found.map(r => lsLocation(r, lang)).filter(Boolean);
+      } catch {}
+    }
+    if (!refs || !refs.length) refs = referencesTo(word.name);
+    openPalette({
+      placeholder: `${refs.length} reference${refs.length === 1 ? '' : 's'} to '${word.name}'. Type to filter`,
+      items: query => refs
+        .filter(r => !query || r.text.toLowerCase().includes(query.toLowerCase()) || (r.file || '').includes(query))
+        .map(r => ({ label: r.text, detail: `${r.file ? r.file + ':' : 'line '}${r.line + 1}`, run: () => revealLocation(r) })),
+    });
+  }
+
+  // Replaces a doc's text with new text, touching only the lines that differ
+  // so cursors and the peer's view stay put.
+  function replaceChangedLines(cm, text) {
+    const before = cm.getValue().split('\n');
+    const after = text.split('\n');
+    if (before.join('\n') === text) return false;
+    cm.operation(() => {
+      if (before.length !== after.length) {
+        cm.replaceRange(text, Pos(0, 0), Pos(cm.lastLine(), cm.getLine(cm.lastLine()).length), '+rename');
+        return;
+      }
+      for (let i = before.length - 1; i >= 0; i--) {
+        if (before[i] !== after[i]) cm.replaceRange(after[i], Pos(i, 0), Pos(i, before[i].length), '+rename');
+      }
+    });
+    return true;
+  }
+
+  // Rename every use of a name across the practical's files: the language
+  // server's rename when it's running, otherwise every use of the word in
+  // code. Each file is shown while it's edited so the edit syncs like typing.
+  function renameSymbol() {
+    if (editor.getOption('readOnly')) return;
+    const word = wordAt(editor.getDoc(), editor.getCursor());
+    const type = word && (editor.getTokenTypeAt(Pos(word.line, word.start + 1)) || '');
+    if (!word || /comment|string|keyword/.test(type)) { showNotice('Put the cursor on a name to rename it'); return; }
+    openPalette({
+      placeholder: `Rename '${word.name}' to`,
+      value: word.name,
+      accept: async value => {
+        const next = value.trim();
+        if (!next || next === word.name) { editor.focus(); return; }
+        if (!/^[A-Za-z_$][\w$]*$/.test(next)) { showNotice(`'${next}' isn't a valid name`); editor.focus(); return; }
+        const back = cursorLocation();
+        const lang = completionLang();
+        if (lsUsable(lang)) {
+          try {
+            const changes = await lsRequest('rename', { line: word.line, ch: word.start, newName: next });
+            let files = 0;
+            for (const [name, text] of Object.entries(changes)) {
+              const target = project ? name : name === bufferFile(lang) ? null : undefined;
+              if (target === undefined || (target && !project.files.some(f => f.name === target))) continue;
+              if (target && target !== currentFileName()) showFile(target);
+              if (replaceChangedLines(editor, text)) files++;
+            }
+            revealLocation(back, false);
+            showNotice(files ? `Renamed '${word.name}' to '${next}'${files > 1 ? ` in ${files} files` : ''}` : `Nothing to rename`);
+            return;
+          } catch (err) {
+            // The server refused (say, a built-in name); only fall back if it isn't running.
+            if (lsUsable(lang) && err.message !== 'timeout') { showNotice(err.message); editor.focus(); return; }
+          }
+        }
+        const re = wordRegex(word.name, true, true);
+        let total = 0;
+        let files = 0;
+        for (const src of codeSources()) {
+          if (src.file && src.file !== currentFileName()) showFile(src.file);
+          const hits = [];
+          editor.eachLine(handle => {
+            const line = editor.getLineNumber(handle);
+            for (const m of handle.text.matchAll(re)) {
+              if (!/comment|string/.test(editor.getTokenTypeAt(Pos(line, m.index + 1)) || '')) hits.push([line, m.index]);
+            }
+          });
+          if (!hits.length) continue;
+          editor.operation(() => {
+            for (let i = hits.length - 1; i >= 0; i--) {
+              const [line, ch] = hits[i];
+              editor.replaceRange(next, Pos(line, ch), Pos(line, ch + word.name.length), '+rename');
+            }
+          });
+          total += hits.length;
+          files++;
+        }
+        revealLocation(back, false);
+        showNotice(`Renamed ${total} occurrence${total === 1 ? '' : 's'}${files > 1 ? ` in ${files} files` : ''}`);
+      },
+    });
+  }
+
+  // ----- Line and multi-cursor commands -----
+  // The line blocks the selections cover (a selection ending at the start
+  // of a line doesn't include that line), merged where they touch.
+  function selectedLineBlocks(cm) {
+    const blocks = cm.listSelections().map(r => {
+      const from = r.from();
+      const to = r.to();
+      const end = to.ch === 0 && to.line > from.line ? to.line - 1 : to.line;
+      return { start: from.line, end };
+    }).sort((a, b) => a.start - b.start);
+    const merged = [];
+    blocks.forEach(b => {
+      const last = merged[merged.length - 1];
+      if (last && b.start <= last.end + 1) last.end = Math.max(last.end, b.end);
+      else merged.push({ ...b });
+    });
+    return merged;
+  }
+  function shiftSelections(cm, delta) {
+    cm.setSelections(cm.listSelections().map(r => ({
+      anchor: Pos(r.anchor.line + delta(r.anchor.line), r.anchor.ch),
+      head: Pos(r.head.line + delta(r.head.line), r.head.ch),
+    })));
+  }
+  function moveLines(cm, dir) {
+    if (cm.isReadOnly()) return;
+    const blocks = selectedLineBlocks(cm);
+    if (dir < 0 && blocks[0].start === 0) return;
+    if (dir > 0 && blocks[blocks.length - 1].end === cm.lastLine()) return;
+    const ranges = cm.listSelections();
+    cm.operation(() => {
+      const order = dir < 0 ? blocks : [...blocks].reverse();
+      order.forEach(({ start, end }) => {
+        const text = cm.getRange(Pos(start, 0), Pos(end, cm.getLine(end).length));
+        if (dir < 0) {
+          const above = cm.getLine(start - 1);
+          cm.replaceRange(`${text}\n${above}`, Pos(start - 1, 0), Pos(end, cm.getLine(end).length), '+move');
+        } else {
+          const below = cm.getLine(end + 1);
+          cm.replaceRange(`${below}\n${text}`, Pos(start, 0), Pos(end + 1, below.length), '+move');
+        }
+      });
+      cm.setSelections(ranges);
+      shiftSelections(cm, () => dir);
+    });
+  }
+  function copyLines(cm, dir) {
+    if (cm.isReadOnly()) return;
+    const blocks = selectedLineBlocks(cm);
+    const ranges = cm.listSelections();
+    cm.operation(() => {
+      [...blocks].reverse().forEach(({ start, end }) => {
+        const text = cm.getRange(Pos(start, 0), Pos(end, cm.getLine(end).length));
+        cm.replaceRange(`\n${text}`, Pos(end, cm.getLine(end).length), null, '+copy');
+      });
+      // Lines shift by the size of every copy inserted above them, plus
+      // their own block's when the cursor goes to the lower copy.
+      const delta = line => blocks.reduce((sum, b) => {
+        const size = b.end - b.start + 1;
+        if (b.end < line) return sum + size;
+        if (dir > 0 && b.start <= line && line <= b.end) return sum + size;
+        return sum;
+      }, 0);
+      cm.setSelections(ranges);
+      shiftSelections(cm, delta);
+    });
+  }
+  function selectLine(cm) {
+    cm.setSelections(cm.listSelections().map(r => {
+      const from = r.from();
+      const to = r.to();
+      const full = from.ch === 0 && to.ch === 0 && to.line > from.line;
+      const last = full ? to.line : to.line + 1;
+      const head = last > cm.lastLine() ? Pos(cm.lastLine(), cm.getLine(cm.lastLine()).length) : Pos(last, 0);
+      return { anchor: Pos(from.line, 0), head };
+    }));
+  }
+  // Cmd/Ctrl+D: select the word, then add the next match of the selection.
+  let addNextWholeWord = false;
+  function addNextOccurrence(cm) {
+    const ranges = cm.listSelections();
+    const last = ranges[ranges.length - 1];
+    if (ranges.length === 1 && last.empty()) {
+      const word = wordAt(cm.getDoc(), last.head);
+      if (!word) return;
+      cm.setSelection(Pos(word.line, word.start), Pos(word.line, word.end));
+      addNextWholeWord = true;
+      return;
+    }
+    const text = cm.getRange(last.from(), last.to());
+    if (!text || text.includes('\n')) return;
+    const re = wordRegex(text, addNextWholeWord, true);
+    const taken = new Set(ranges.map(r => `${r.from().line}:${r.from().ch}`));
+    const total = cm.lineCount();
+    for (let n = 0; n <= total; n++) {
+      const line = (last.to().line + n) % total;
+      const fromCh = n === 0 ? last.to().ch : 0;
+      for (const m of cm.getLine(line).matchAll(re)) {
+        if (m.index < fromCh || taken.has(`${line}:${m.index}`)) continue;
+        cm.addSelection(Pos(line, m.index), Pos(line, m.index + text.length));
+        cm.scrollIntoView(Pos(line, m.index));
+        return;
+      }
+    }
+  }
+  // Typing or clicking starts over; Cmd/Ctrl+D's own selections have no origin.
+  editor.on('beforeSelectionChange', (cm, obj) => {
+    if (obj.origin && obj.ranges.length === 1) addNextWholeWord = false;
+  });
+  function selectAllOccurrences(cm) {
+    const doc = cm.getDoc();
+    let text = doc.getSelection();
+    let whole = false;
+    if (!text) {
+      const word = wordAt(doc, doc.getCursor());
+      if (!word) return;
+      text = word.name;
+      whole = true;
+    }
+    if (text.includes('\n')) return;
+    const re = wordRegex(text, whole, true);
+    const ranges = [];
+    doc.eachLine(handle => {
+      const line = doc.getLineNumber(handle);
+      for (const m of handle.text.matchAll(re)) ranges.push({ anchor: Pos(line, m.index), head: Pos(line, m.index + text.length) });
+    });
+    if (ranges.length) cm.setSelections(ranges, ranges.length - 1);
+  }
+  function insertLine(cm, below) {
+    if (cm.isReadOnly()) return;
+    cm.operation(() => {
+      const lines = [...new Set(cm.listSelections().map(r => r.head.line))].sort((a, b) => b - a);
+      lines.forEach(line => {
+        const indent = cm.getLine(line).match(/^\s*/)[0];
+        if (below) cm.replaceRange(`\n${indent}`, Pos(line, cm.getLine(line).length), null, '+input');
+        else cm.replaceRange(`${indent}\n`, Pos(line, 0), null, '+input');
+      });
+      const heads = cm.listSelections().map(r => r.head.line);
+      cm.setSelections(heads.map((line, i) => {
+        const target = below ? line + 1 : line - 1;
+        const at = Pos(Math.max(0, target), cm.getLine(Math.max(0, target)).length);
+        return { anchor: at, head: at };
+      }));
+    });
+  }
+
+  // The command palette lists everything, with its shortcut.
+  const key = (mac, other = mac) => (isMac ? mac : other);
+  const COMMANDS = [
+    ['Go to Definition', 'F12 or ' + key('Cmd+Click', 'Ctrl+Click'), () => goToDefinition()],
+    ['Go Back', key('Ctrl+-', 'Alt+Left'), goBack],
+    ['Go Forward', key('Ctrl+Shift+-', 'Alt+Right'), goForward],
+    ['Find All References', 'Shift+F12', () => showReferences()],
+    ['Rename Symbol', 'F2', renameSymbol],
+    ['Go to File', key('Cmd+P', 'Ctrl+P'), quickOpen],
+    ['Go to Symbol in File', key('Cmd+Shift+O', 'Ctrl+Shift+O'), goToSymbol],
+    ['Go to Line', 'Ctrl+G', goToLine],
+    ['Find', key('Cmd+F', 'Ctrl+F'), () => openFind(false)],
+    ['Replace', key('Cmd+Alt+F', 'Ctrl+H'), () => openFind('focus-replace')],
+    ['Add Next Occurrence', key('Cmd+D', 'Ctrl+D'), () => addNextOccurrence(editor)],
+    ['Select All Occurrences', key('Cmd+Shift+L', 'Ctrl+Shift+L'), () => selectAllOccurrences(editor)],
+    ['Move Line Up', 'Alt+Up', () => moveLines(editor, -1)],
+    ['Move Line Down', 'Alt+Down', () => moveLines(editor, 1)],
+    ['Copy Line Up', 'Shift+Alt+Up', () => copyLines(editor, -1)],
+    ['Copy Line Down', 'Shift+Alt+Down', () => copyLines(editor, 1)],
+    ['Delete Line', key('Cmd+Shift+K', 'Ctrl+Shift+K'), () => editor.execCommand('deleteLine')],
+    ['Insert Line Below', '', () => insertLine(editor, true)], // Cmd/Ctrl+Enter is Run here
+    ['Insert Line Above', key('Cmd+Shift+Enter', 'Ctrl+Shift+Enter'), () => insertLine(editor, false)],
+    ['Expand Line Selection', key('Cmd+L', 'Ctrl+L'), () => selectLine(editor)],
+    ['Toggle Line Comment', key('Cmd+/', 'Ctrl+/'), () => editor.execCommand('toggleComment')],
+    ['Indent Line', key('Cmd+]', 'Ctrl+]'), () => editor.execCommand('indentMore')],
+    ['Outdent Line', key('Cmd+[', 'Ctrl+['), () => editor.execCommand('indentLess')],
+    ['Trigger Suggest', 'Ctrl+Space', () => showCompletions(editor)],
+    ['Format Document', key('Shift+Alt+F'), () => formatCode()],
+    ['Run', key('Cmd+Enter', 'Ctrl+Enter'), () => runOrTest()],
+  ].map(([label, detail, run]) => ({ label, detail, run }));
+  function commandPalette() {
+    openPalette({ placeholder: 'Type a command', items: query => filterItems(COMMANDS, query) });
+  }
+
+  const cmd = fn => cm => { if (mode !== 'draw') fn(cm); };
+  const NAV_KEYS = {
+    'F12': cmd(() => goToDefinition()),
+    'Shift-F12': cmd(() => showReferences()),
+    'F2': cmd(renameSymbol),
+    'Ctrl-G': cmd(goToLine),
+    [`${MOD}-P`]: cmd(quickOpen),
+    [`Shift-${MOD}-O`]: cmd(goToSymbol),
+    [`Shift-${MOD}-P`]: cmd(commandPalette),
+    'F1': cmd(commandPalette),
+    [`${MOD}-F`]: cmd(() => openFind(false)),
+    [isMac ? 'Cmd-Alt-F' : 'Ctrl-H']: cmd(() => openFind('focus-replace')),
+    [isMac ? 'Cmd-G' : 'F3']: cmd(() => { if (findIsOpen() || findInput.value) { if (!findIsOpen()) openFind(false); findStep(1); } }),
+    [isMac ? 'Shift-Cmd-G' : 'Shift-F3']: cmd(() => { if (findIsOpen()) findStep(-1); }),
+    'Esc': cm => { if (findIsOpen()) closeFind(); else if (cm.listSelections().length > 1) cm.setSelection(cm.getCursor()); else return CodeMirror.Pass; },
+    [`${MOD}-D`]: cmd(addNextOccurrence),
+    [`Shift-${MOD}-L`]: cmd(selectAllOccurrences),
+    [`${MOD}-L`]: cmd(selectLine),
+    'Alt-Up': cmd(cm => moveLines(cm, -1)),
+    'Alt-Down': cmd(cm => moveLines(cm, 1)),
+    'Shift-Alt-Up': cmd(cm => copyLines(cm, -1)),
+    'Shift-Alt-Down': cmd(cm => copyLines(cm, 1)),
+    [`Shift-${MOD}-K`]: cmd(cm => cm.execCommand('deleteLine')),
+    [`Shift-${MOD}-Enter`]: cmd(cm => insertLine(cm, false)),
+    // Ctrl+- is zoom out on Windows and Linux, so back is Alt+Left there.
+    ...(isMac
+      ? { 'Ctrl--': cmd(goBack), 'Shift-Ctrl--': cmd(goForward) }
+      : { 'Alt-Left': cmd(goBack), 'Alt-Right': cmd(goForward) }),
+  };
+  editor.setOption('extraKeys', { ...editor.getOption('extraKeys'), ...NAV_KEYS });
+  settingsMenu.querySelectorAll('[data-language-server]').forEach(b => {
+    b.addEventListener('click', () => {
+      renderLsStatus();
+      if (!editorPrefs.languageServer) clearDiagnostics();
+      else if (lsReady()) refreshDiagnosticsSoon(0);
+    });
+  });
+  settingsBtn.addEventListener('click', renderLsStatus);
+  document.getElementById('commandPaletteBtn')?.addEventListener('click', () => {
+    document.getElementById('editorSettingsMenu').classList.add('hidden');
+    document.getElementById('editorSettingsBtn').setAttribute('aria-expanded', 'false');
+    commandPalette();
   });
 
   // ---------- Remote cursor + selection indicator ----------

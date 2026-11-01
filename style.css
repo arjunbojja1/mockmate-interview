@@ -1272,6 +1272,29 @@ body.room {
 .seg button + button { border-left: 1px solid var(--rule-2); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
 .settings-note { margin: 6px 0 0; font-size: 12px; color: var(--ink-3); }
+.settings-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-link:hover { color: var(--blue-ink); }
+.keycap {
+  padding: 1px 5px;
+  border: 1px solid var(--rule-2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+}
 
 /* ---------- Light editor (per-viewer preference) ---------- */
 body.editor-light {
@@ -1542,3 +1565,120 @@ summary.ptest-line::-webkit-details-marker { display: none; }
 }
 li.CodeMirror-hint-active { background: var(--slate-3); }
 .hint-kind { margin-left: auto; font-family: var(--sans); font-size: 11.5px; color: var(--slate-dim); }
+
+/* ---------- Go to definition, find, palette ---------- */
+.goto-armed .cm-goto-link { cursor: pointer; }
+.cm-s-onsite .cm-goto-link { color: #8FB3FF !important; text-decoration: underline; text-underline-offset: 2px; }
+.cm-s-onsite .cm-def-flash { background: rgba(110, 149, 255, 0.32); border-radius: 2px; transition: background 0.6s ease-out; }
+.cm-s-onsite .cm-occurrence { background: rgba(255, 255, 255, 0.09); border-radius: 2px; }
+.cm-s-onsite .cm-find-match { background: rgba(233, 196, 106, 0.22); border-radius: 2px; }
+.cm-s-onsite .cm-find-current { background: rgba(233, 196, 106, 0.5); box-shadow: 0 0 0 1px rgba(233, 196, 106, 0.8); }
+.editor-light .cm-s-onsite .cm-goto-link { color: var(--blue) !important; }
+.editor-light .cm-s-onsite .cm-def-flash { background: rgba(38, 72, 216, 0.18); }
+.editor-light .cm-s-onsite .cm-occurrence { background: rgba(26, 34, 56, 0.08); }
+.editor-light .cm-s-onsite .cm-find-match { background: rgba(201, 125, 0, 0.16); }
+.editor-light .cm-s-onsite .cm-find-current { background: rgba(201, 125, 0, 0.34); box-shadow: 0 0 0 1px rgba(168, 100, 0, 0.6); }
+
+.find-widget, .palette {
+  position: absolute;
+  z-index: 35;
+  border: 1px solid var(--slate-rule);
+  border-radius: 8px;
+  background: var(--slate-2);
+  box-shadow: 0 8px 24px rgba(10, 14, 26, 0.28);
+  color: var(--slate-text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+}
+.find-widget { top: 8px; right: 16px; display: grid; gap: 4px; padding: 4px; }
+.find-row { display: flex; align-items: center; gap: 2px; }
+.find-widget input, .palette-input {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--slate-rule);
+  border-radius: 5px;
+  outline: none;
+  background: var(--slate);
+  color: var(--slate-text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.find-widget input { width: 220px; }
+.find-widget input:focus, .palette-input:focus { border-color: #6E95FF; }
+.find-widget.no-results .find-input { border-color: rgba(214, 56, 47, 0.7); }
+.find-opt, .find-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--slate-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.find-opt:hover, .find-btn:hover { background: var(--slate-3); color: var(--slate-text); }
+.find-opt[aria-pressed="true"] { border-color: #6E95FF; color: var(--slate-text); background: rgba(110, 149, 255, 0.16); }
+.find-text { font-family: var(--sans); }
+.find-count { min-width: 72px; padding: 0 6px; color: var(--slate-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.palette { top: 8px; left: 50%; width: min(560px, calc(100% - 32px)); transform: translateX(-50%); padding: 6px; }
+.palette-input { width: 100%; height: 32px; font-family: var(--sans); font-size: 13px; }
+.palette-list { max-height: 320px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.palette-item {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.palette-item.active { background: var(--slate-3); }
+.palette-label { overflow: hidden; font-family: var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.palette-detail { flex: none; margin-left: auto; color: var(--slate-dim); font-size: 11.5px; }
+
+.editor-notice {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 35;
+  padding: 6px 12px;
+  border: 1px solid var(--slate-rule);
+  border-radius: 6px;
+  background: var(--slate-2);
+  color: var(--slate-text);
+  font-size: 12.5px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* ---------- Language server: problems and hover ---------- */
+.cm-s-onsite .cm-diag-error { text-decoration: underline wavy rgba(255, 110, 100, 0.9); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.cm-s-onsite .cm-diag-warning { text-decoration: underline wavy rgba(233, 196, 106, 0.85); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.editor-light .cm-s-onsite .cm-diag-error { text-decoration-color: #D6382F; }
+.editor-light .cm-s-onsite .cm-diag-warning { text-decoration-color: #A86400; }
+.editor-hover {
+  position: absolute;
+  z-index: 36;
+  max-width: min(560px, calc(100% - 16px));
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--slate-rule);
+  border-radius: 6px;
+  background: var(--slate-2);
+  box-shadow: 0 8px 24px rgba(10, 14, 26, 0.28);
+  color: var(--slate-text);
+  font-size: 12.5px;
+  pointer-events: none;
+}
+.editor-hover > div { padding: 6px 10px; }
+.editor-hover > div + div { border-top: 1px solid var(--slate-rule); }
+.hover-title { font-family: var(--mono); white-space: pre-wrap; }
+.hover-doc { color: var(--slate-dim); white-space: pre-wrap; }
+.hover-problem { font-family: var(--mono); white-space: pre-wrap; }
+.hover-error { color: #FF8A80; }
+.hover-warning { color: #E9C46A; }
+.editor-light .hover-error { color: #B42318; }
+.editor-light .hover-warning { color: #8A5200; }
+.settings-status { margin-top: 0; }

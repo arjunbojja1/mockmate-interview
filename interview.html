@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Onsite — Interview room</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%231A2238%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23F4F6F5%22 stroke-width=%223%22/><circle cx=%2223%22 cy=%229%22 r=%223%22 fill=%22%23D6382F%22/></svg>" />
-<link rel="stylesheet" href="style.css?v=47" />
+<link rel="stylesheet" href="style.css?v=49" />
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css" />
 </head>
 <body class="room">
@@ -132,6 +132,18 @@
                 <button type="button" data-autocomplete="on">On</button>
                 <button type="button" data-autocomplete="off">Off</button>
               </div>
+            </div>
+            <div class="settings-row">
+              <span id="languageServerLabel">Language server</span>
+              <div class="seg" role="group" aria-labelledby="languageServerLabel">
+                <button type="button" data-language-server="on">On</button>
+                <button type="button" data-language-server="off">Off</button>
+              </div>
+            </div>
+            <p class="settings-note settings-status" id="languageServerStatus" aria-live="polite"></p>
+            <div class="settings-row">
+              <span>Shortcuts</span>
+              <button type="button" class="settings-link" id="commandPaletteBtn">All commands <kbd class="keycap">F1</kbd></button>
             </div>
             <p class="settings-note">Only changes your screen.</p>
           </div>
@@ -351,6 +363,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="projects.js?v=1"></script>
 <script src="project-runner.js?v=1"></script>
 <script src="report.js?v=3"></script>
-<script src="app.js?v=51"></script>
+<script src="app.js?v=55"></script>
 </body>
 </html>
