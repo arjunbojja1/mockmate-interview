@@ -3144,7 +3144,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     updateRunButtons();
     renderProjectTests();
     broadcastProject();
-    if (role === 'interviewer') broadcast({ type: 'lang', value: langSelect.value });
+    if (role === 'interviewer') {
+      broadcast({ type: 'lang', value: langSelect.value });
+      broadcast({ type: 'code', value: mainDoc.getValue(), file: null });
+    }
   }
 
   function showFile(name) {
@@ -5021,8 +5024,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     candidateDisplayName = state.candidateName || '';
     admittedName = state.admittedName || '';
     wbObjects = state.wb || [];
-    if (state.replay && state.replay.start) replay = state.replay;
-    else resetReplay();
+    if (state.replay && state.replay.start) {
+      // Older or hand-edited saves can be missing a list; every caller pushes to them.
+      replay = { ...state.replay, events: state.replay.events || [], marks: state.replay.marks || [] };
+    } else resetReplay();
     if (DURATIONS.includes(state.durationMin)) {
       durationMin = state.durationMin;
       durationSelect.value = String(durationMin);
@@ -5183,7 +5188,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     conn.send({ type: 'question', value: liveQuestionText(), visible: questionVisible });
     conn.send({ type: 'meta', value: liveMeta() });
     conn.send(testcasesMsg());
-    conn.send({ type: 'code', value: mainDoc.getValue(), file: null });
+    // While a practical is open the single-file buffer isn't in use, so the
+    // candidate doesn't get it; closeProject() sends it when it's back.
+    conn.send({ type: 'code', value: project ? '' : mainDoc.getValue(), file: null });
     conn.send({ type: 'lang', value: project ? project.prevLang : langSelect.value });
     conn.send(projectMsg());
     conn.send({ type: 'verdict', value: currentVerdict });
