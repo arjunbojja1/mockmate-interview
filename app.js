@@ -2508,18 +2508,39 @@
     runTestsBtn.classList.add('hidden');
   }
 
+  // Judge0 is called with base64 bodies: with plain text it rejects any run
+  // whose output isn't valid UTF-8 (a program printing "é" in a sandbox whose
+  // stdout isn't UTF-8), failing the whole request with a 400.
+  function toBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  }
+  function fromBase64(value) {
+    if (typeof value !== 'string') return value;
+    const binary = atob(value.replace(/\s+/g, ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes); // invalid bytes become U+FFFD instead of failing
+  }
+
   async function executeCode(languageId, code, stdin) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await fetch('https://ce.judge0.com/submissions?base64_encoded=false&wait=true', {
+      const res = await fetch('https://ce.judge0.com/submissions?base64_encoded=true&wait=true', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_code: code, language_id: languageId, stdin: stdin || '' }),
+        body: JSON.stringify({ source_code: toBase64(code), language_id: languageId, stdin: toBase64(stdin || '') }),
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`execution request failed (${res.status})`);
-      return res.json();
+      const result = await res.json();
+      for (const key of ['stdout', 'stderr', 'compile_output', 'message']) result[key] = fromBase64(result[key]);
+      return result;
     } catch (e) {
       if (e.name === 'AbortError') throw new Error('execution timed out — the free judge server may be under load, try again');
       throw e;
