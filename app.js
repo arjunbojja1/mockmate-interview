@@ -3077,6 +3077,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
   const hideFileBtn = document.getElementById('hideFileBtn');
   const deleteFileBtn = document.getElementById('deleteFileBtn');
   const candidateRunsToggle = document.getElementById('candidateRunsToggle');
+  const browserRunToggle = document.getElementById('browserRunToggle');
   const projectTestsPane = document.getElementById('projectTestsPane');
   const projectTestsHint = document.getElementById('projectTestsHint');
   const projectTestsList = document.getElementById('projectTestsList');
@@ -3121,6 +3122,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       lang: project.lang,
       entry: project.entry,
       candidateRuns: project.candidateRuns,
+      browserRun: project.browserRun,
       current: project.current,
       files: projectFiles(true),
       results: project.results,
@@ -3135,6 +3137,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       lang: def.lang,
       entry: def.entry,
       candidateRuns: def.candidateRuns !== false,
+      browserRun: !!def.browserRun, // run on this computer (Pyodide) so code can reach localhost
       files: def.files.map(makeProjectFile),
       current: null,
       results: def.results || null,
@@ -3196,6 +3199,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
         lang: project.lang,
         entry: project.entry,
         candidateRuns: project.candidateRuns,
+        browserRun: project.browserRun,
         files: projectFiles(false).map(({ name, content }) => ({ name, content })),
       },
     };
@@ -3211,6 +3215,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (!project || project.lang !== def.lang) { openProject(def); return; }
     project.entry = def.entry;
     project.candidateRuns = def.candidateRuns;
+    project.browserRun = !!def.browserRun;
     const existing = new Map(project.files.map(f => [f.name, f]));
     suppressEmit = true;
     try {
@@ -3264,6 +3269,9 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       hideFileBtn.title = cur && cur.hidden ? 'Send this file to the candidate' : 'Keep this file from the candidate. It still runs with the tests.';
       deleteFileBtn.disabled = project.files.length < 2;
       candidateRunsToggle.checked = project.candidateRuns;
+      // Only Python runs in the browser.
+      document.getElementById('browserRunLabel').classList.toggle('hidden', project.lang !== 'python');
+      browserRunToggle.checked = !!project.browserRun;
     }
   }
 
@@ -3307,6 +3315,15 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
       broadcastProject();
       saveRoomStateSoon();
     });
+    browserRunToggle.addEventListener('change', () => {
+      if (!project) return;
+      project.browserRun = browserRunToggle.checked;
+      setOutput(project.browserRun
+        ? 'Runs now happen in your browser, so the code can reach localhost (for example a local model). The first run loads Python, about 10 seconds.'
+        : 'Runs now happen in the cloud sandbox again.');
+      broadcastProject();
+      saveRoomStateSoon();
+    });
   }
 
   // The candidate gets Run / Run tests (and an output pane) in a practical
@@ -3345,7 +3362,7 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     candidateRunTimer = setTimeout(() => {
       setRunBusy(null);
       setOutput("No answer from the interviewer's browser. Try again.");
-    }, 45000);
+    }, project.browserRun ? BROWSER_RUN_TIMEOUT_MS + 15000 : 45000);
   }
 
   const TEST_STATUS_WORDS = { pass: 'PASS', fail: 'FAIL', error: 'ERROR', skip: 'SKIP' };
@@ -3366,6 +3383,50 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (forInterviewer && parsed.printed) lines.push('', 'Printed:', parsed.printed);
     if (err && (forInterviewer || !tests.length)) lines.push('', err);
     return lines.join('\n');
+  }
+
+  // ---------- Running in this browser ----------
+  // A practical can run here (Pyodide in a worker) instead of on Judge0, so
+  // its code can reach services on this computer, like a local model on
+  // localhost. One worker is kept for the session; a run that goes over the
+  // time limit gets the worker killed and a fresh one next time.
+  const BROWSER_RUN_TIMEOUT_MS = 300000;
+  let pyRunner = null;
+  let pyRunId = 0;
+  function runInBrowser(code, onProgress) {
+    if (!pyRunner) pyRunner = new Worker('py-runner.js?v=1', { type: 'module' });
+    const worker = pyRunner;
+    const id = ++pyRunId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        worker.terminate();
+        if (pyRunner === worker) pyRunner = null;
+        resolve({ stdout: '', stderr: `Stopped after ${BROWSER_RUN_TIMEOUT_MS / 60000} minutes.`, status: { id: 5, description: 'Time Limit Exceeded' } });
+      }, BROWSER_RUN_TIMEOUT_MS);
+      const onMessage = (e) => {
+        const msg = e.data || {};
+        if (msg.progress) { if (onProgress) onProgress(msg.progress); return; }
+        if (msg.id !== id) return;
+        cleanup();
+        if (msg.error) reject(new Error(msg.error));
+        else resolve(msg);
+      };
+      const onError = (e) => {
+        cleanup();
+        worker.terminate();
+        if (pyRunner === worker) pyRunner = null;
+        reject(new Error('the in-browser Python runner failed to start' + (e && e.message ? ': ' + e.message : '')));
+      };
+      function cleanup() {
+        clearTimeout(timer);
+        worker.removeEventListener('message', onMessage);
+        worker.removeEventListener('error', onError);
+      }
+      worker.addEventListener('message', onMessage);
+      worker.addEventListener('error', onError);
+      worker.postMessage({ id, code });
+    });
   }
 
   // Interviewer only. by: 'interviewer' | 'candidate' (a run-request).
@@ -3400,7 +3461,10 @@ console.log('\\n${RESULT_MARKER}' + JSON.stringify(__mm_out(__mm_result === unde
     if (share && !byCandidate) broadcast({ type: 'run-status', mode });
     const who = byCandidate ? 'Candidate ran' : 'Ran';
     try {
-      const result = await executeCode(LANGS[lang].judge0, Runner.buildProgram(lang, files, mode, entry), '');
+      const program = Runner.buildProgram(lang, files, mode, entry);
+      const result = project.browserRun && lang === 'python'
+        ? await runInBrowser(program, text => setOutput(text))
+        : await executeCode(LANGS[lang].judge0, program, '');
       if (mode === 'run') {
         const text = formatRunResult({ ...result, stderr: Runner.cleanPaths(result.stderr) });
         setOutput(text);

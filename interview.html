@@ -159,6 +159,9 @@
           <label class="file-run-toggle" title="Lets the candidate use Run and Run tests. Results for hidden files stay private.">
             <input type="checkbox" id="candidateRunsToggle" checked />Candidate runs
           </label>
+          <label class="file-run-toggle" id="browserRunLabel" title="Run this Python practical in your browser instead of the cloud sandbox, so it can reach services on your computer, like a local model at http://localhost:11434.">
+            <input type="checkbox" id="browserRunToggle" />Run in this browser
+          </label>
         </div>
       </div>
       <div class="editor-surface" id="editorSurface">
@@ -363,6 +366,6 @@ window.addEventListener('pageshow', function (e) {
 <script src="projects.js?v=1"></script>
 <script src="project-runner.js?v=1"></script>
 <script src="report.js?v=3"></script>
-<script src="app.js?v=57"></script>
+<script src="app.js?v=58"></script>
 </body>
 </html>
